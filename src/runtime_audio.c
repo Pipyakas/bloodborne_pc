@@ -53,7 +53,9 @@ static uint64_t now_ns(void) { return host_monotonic_ns(); }
 static void sleep_until(uint64_t deadline) { host_sleep_until_ns(deadline); }
 static int sdl_audio(void) {
     if (sdl_ready<0) {
-        const char *mode=getenv("BB_AUDIO");
+        /* BB_HIDDEN=1 (background runs for agents) is silent unless BB_AUDIO asks for sound. */
+        const char *mode=getenv("BB_AUDIO"), *hidden=getenv("BB_HIDDEN");
+        if (!mode && hidden && hidden[0]=='1') mode="none";
         sdl_ready = (!mode || strcmp(mode,"none")) && SDL_InitSubSystem(SDL_INIT_AUDIO);
         printf("Runtime: audio backend %s\n", sdl_ready ? SDL_GetCurrentAudioDriver() : "timer (silent)");
     }
