@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "bbport": {
+      "command": "python",
+      "args": ["tools/mcp/bbport_mcp.py"]
+    }
+  }
+}

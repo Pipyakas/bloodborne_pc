@@ -698,6 +698,7 @@ int main(int argc, char **argv) {
     uint64_t capabilities = memcmp(magic, "BBPROBE1", 8) ? read64(f) : 0;
     if (capabilities & ~UINT64_C(1)) fail("unknown runtime capabilities");
     runtime_start(strict_imports ? 0 : capabilities);
+    runtime_control_start();
     if (!size || size > 512*1024*1024 || entry >= size || !ns || ns > 64 || nr > 1000000 || import_count > 100000)
         fail("boot file limits exceeded");
     int multi=!memcmp(magic,"BBPROBE5",8);

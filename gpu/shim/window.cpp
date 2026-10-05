@@ -23,9 +23,16 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
+    // BB_HIDDEN=1: the window is never shown (agents driving the game through BB_CONTROL while
+    // the desktop is in use); the swapchain keeps the window's size.
+    const char* hidden = std::getenv("BB_HIDDEN");
     const char* fullscreen = std::getenv("BB_FULLSCREEN");
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
-                           fullscreen ? fullscreen[0] == '1' : BbSettings::Get().fullscreen.load());
+    if (hidden && hidden[0] == '1') {
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true);
+    } else {
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
+                               fullscreen ? fullscreen[0] == '1' : BbSettings::Get().fullscreen.load());
+    }
     base_title = title;
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
@@ -75,6 +82,23 @@ int WindowSDL::PollTextInput(std::string& out) {
     return text_state;
 }
 
+bool WindowSDL::SubmitText(const std::string& submitted) {
+    std::scoped_lock lock{text_mutex};
+    if (!text_requested && !text_active) {
+        return false;
+    }
+    text = submitted;
+    text_state = 1;
+    text_stop_requested = text_active;
+    text_requested = text_active = false;
+    return true;
+}
+
+bool WindowSDL::TextInputActive() {
+    std::scoped_lock lock{text_mutex};
+    return text_requested || text_active;
+}
+
 void WindowSDL::UpdateTextTitle() {
     const std::string title = text_active ? base_title + " \u2014 " + text_prompt + ": " + text + "_  (Enter = OK, Esc = cancel)"
                                           : base_title;
@@ -88,6 +112,11 @@ bool WindowSDL::PollEvents() {
             text_requested = false;
             text_active = true;
             SDL_StartTextInput(window);
+            UpdateTextTitle();
+        }
+        if (text_stop_requested) { // SubmitText
+            text_stop_requested = false;
+            SDL_StopTextInput(window);
             UpdateTextTitle();
         }
     }
