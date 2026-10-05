@@ -35,12 +35,15 @@ public:
     void BeginTextInput(const std::string& initial, const std::string& prompt);
     /// 0 while typing, 1 confirmed (Enter), 2 cancelled (Escape); text is UTF-8.
     int PollTextInput(std::string& text);
+    /// Control channel: confirms the open text entry with `text`; false when none is open.
+    bool SubmitText(const std::string& text);
+    bool TextInputActive();
 
 private:
     std::atomic<s32> width, height;
     std::atomic<bool> is_open{true};
     std::mutex text_mutex;
-    bool text_requested{}, text_active{};
+    bool text_requested{}, text_active{}, text_stop_requested{};
     int text_state{};
     std::string text, text_prompt, base_title;
     void UpdateTextTitle();

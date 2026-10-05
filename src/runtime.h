@@ -89,6 +89,13 @@ uintptr_t runtime_audio_resolve(const char *name);
 void runtime_audio_report(void);
 uintptr_t runtime_pad_resolve(const char *name);
 void runtime_pad_report(void);
+/* Scripted input for the control channel (runtime_control.c, BB_CONTROL): tokens as in
+ * BB_PAD_FILE. press holds them for `frames` pad reads and returns -1 when the game did not read
+ * the pad that often within timeout_ms. */
+void runtime_pad_set(const char *tokens);
+int runtime_pad_press(const char *tokens, unsigned frames, unsigned timeout_ms);
+void runtime_pad_status(int *is_open, uint64_t *read_count);
+void runtime_control_start(void);
 uintptr_t runtime_rtc_resolve(const char *name);
 const char *runtime_file_user_dir(void);
 void runtime_savedata_configure(const char *title);

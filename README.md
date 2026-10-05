@@ -194,7 +194,19 @@ pass), `BB_FSR4_PROFILE=1` (GPU time per FSR 4 pass), `BB_UPSCALER=taa|fsr3|fsr4
 `BB_LIVE_RES=1` (live resolution changes instead of the startup patch for outputs other than 1080p),
 `BB_PAD_RECORD=file` / `BB_PAD_REPLAY=file` (record a route with F9, replay it in scripted tests),
 `BB_GC_BUDGET_MB=N` (texture cache budget, as on integrated GPUs), `BB_PRESENT_DUMP_TRIGGER=file`
-with `BB_PRESENT_DUMP_COUNT=N` (dump N consecutive presented frames).
+with `BB_PRESENT_DUMP_COUNT=N` (dump N consecutive presented frames), `BB_HIDDEN=1` (the window
+is never shown and the host keyboard and gamepads are ignored), `BB_CONTROL=port` (a line protocol
+on 127.0.0.1 for pad input, frame waits and PNG screenshots; 0 picks a free port; commands in
+`src/runtime_control.c`).
+
+**Agents (MCP):** `tools/mcp/bbport_mcp.py` (registered in `.mcp.json`, Python standard library
+only) starts the game in the background with `BB_HIDDEN=1`, `BB_AUDIO=none`, no console and a
+60 FPS limit, and gives agents `game_launch`, `game_screenshot`, `game_press`, `game_hold`,
+`game_release`, `game_wait`, `game_log`, `game_text`, `game_commands`, `game_status` and
+`game_stop`. Screenshots are read back from the presenter, so the desktop and its focus stay
+untouched; the log is `out/mcp/game.log`. The same tools run from a shell, one call each, the
+game running in between: `python tools/mcp/bbport_mcp.py launch`, `... press tokens=cross`,
+`... screenshot` (prints the PNG's path), `... stop`, `... help`.
 More in [docs/](docs); recent changes: [docs/CHANGES_2026-10-02.md](docs/CHANGES_2026-10-02.md),
 [docs/CHANGES_2026-10-03.md](docs/CHANGES_2026-10-03.md).
 

@@ -12,6 +12,7 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
+#include "bbport_capture.h"
 #include "bbport_overlay.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
@@ -620,6 +621,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                          vk::ImageLayout::eTransferDstOptimal,
                          MakeImageBlitFit(frame->width, frame->height, extent.width, extent.height),
                          vk::Filter::eLinear);
+        // bbport: the control channel's screenshot (src/runtime_control.c), without the menu.
+        BbCapture::Record(instance, scheduler, cmdbuf, frame->image, swapchain.GetSurfaceFormat().format,
+                          frame->width, frame->height);
         // bbport: the settings menu / FPS counter over the frame, at display resolution.
         const bool overlay = BbOverlay::Visible();
         const std::array post_barriers{
@@ -689,6 +693,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     }
 
     free_frame();
+    BbCapture::Presented();
     if (!is_reusing_frame && is_game_frame) {
         DebugState.IncFlipFrameNum();
     }

@@ -5,10 +5,14 @@
  *   WASD left stick, IJKL right stick (camera), arrow keys d-pad,
  *   Enter / Space Cross (OK), Esc / LShift Circle (Return), E Square, Q Triangle,
  *   1 L1, 3 R1, R L2, F R2, Z L3, C R3, Tab Options, G left touchpad,
- *   Backspace right touchpad. */
+ *   Backspace right touchpad.
+ * BB_HIDDEN=1 (hidden window, see gpu/shim/window.cpp) ignores the host's gamepad and keyboard
+ * (whatever background_gamepad and keyboard_controls say): only scripted input (BB_PAD_FILE,
+ * BB_CONTROL) reaches the game. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,6 +65,11 @@ static size_t reads;
 static uint8_t connected_count;
 
 static uint64_t now_us(void) { return host_monotonic_ns()/1000u; }
+static int host_input_off(void) {
+    static int off=-1;
+    if (off<0) { const char *hidden=getenv("BB_HIDDEN"); off=hidden && hidden[0]=='1'; }
+    return off;
+}
 static uint8_t axis(int16_t v) { int x=(v+32768)>>8; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }
 static uint8_t trigger(int16_t v) { int x=v>>7; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }
 static uint16_t touch_axis(float v, int max) {
@@ -74,6 +83,7 @@ static void touch_click(PadData *d, int right) {
 
 /* Opens the first gamepad SDL knows about; called under lock. */
 static SDL_Gamepad *current_gamepad(void) {
+    if (host_input_off()) return NULL;
     if (!sdl_ready) sdl_ready = SDL_WasInit(SDL_INIT_GAMEPAD) ? 1 : SDL_InitSubSystem(SDL_INIT_GAMEPAD) ? 1 : -1;
     if (sdl_ready<0) return NULL;
     if (gamepad && !SDL_GamepadConnected(gamepad)) { SDL_CloseGamepad(gamepad); gamepad=NULL; }
@@ -95,7 +105,8 @@ static void sample_host(PadData *d) {
     d->connected=1; d->connected_count=connected_count ? connected_count : 1;
     d->timestamp=now_us();
     SDL_Gamepad *g=current_gamepad();
-    const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
+    /* BB_HIDDEN: no host keyboard (current_gamepad gives no gamepad either). */
+    const bool *k=SDL_WasInit(SDL_INIT_VIDEO) && !host_input_off() ? SDL_GetKeyboardState(NULL) : NULL;
     /* Keys still held from the settings menu (Escape closing it) stay out of the game
      * until released. */
     static bool held_for_menu[SDL_SCANCODE_COUNT];
@@ -171,6 +182,35 @@ static void sample_host(PadData *d) {
 static struct { uint32_t buttons; int stick[4]; int touch_side; } injected={0,{-1,-1,-1,-1},-1};
 static int replay_armed;      /* 1 while a BB_PAD_REPLAY recording plays, 2 once it ended */
 static uint64_t replay_start; /* 0: (re)start at the next sample */
+static size_t release_at;     /* runtime_pad_press: injected input ends at this read */
+/* Replaces the injected state with the one `text` names (BB_PAD_FILE grammar); called under lock. */
+static void parse_inject(const char *text) {
+    static const struct { const char *name; uint32_t ps; } names[]={
+        {"cross",BTN_CROSS}, {"circle",BTN_CIRCLE}, {"square",BTN_SQUARE}, {"triangle",BTN_TRIANGLE},
+        {"l1",BTN_L1}, {"r1",BTN_R1}, {"l2",BTN_L2}, {"r2",BTN_R2}, {"l3",BTN_L3}, {"r3",BTN_R3},
+        {"options",BTN_OPTIONS}, {"touchpad",BTN_TOUCHPAD},
+        {"up",BTN_UP}, {"down",BTN_DOWN}, {"left",BTN_LEFT}, {"right",BTN_RIGHT},
+    };
+    static const char *sticks[]={"lx=","ly=","rx=","ry="};
+    injected.buttons=0;
+    injected.touch_side=-1;
+    for (int i=0;i<4;++i) injected.stick[i]=-1;
+    char token[64];
+    while (*text) {
+        size_t n=0;
+        while (isspace((unsigned char)*text)) ++text;
+        while (*text && !isspace((unsigned char)*text)) { if (n<sizeof(token)-1) token[n++]=*text; ++text; }
+        if (!n) break;
+        token[n]=0;
+        if (!strcmp(token,"replay") && replay_armed!=1) { replay_armed=1; replay_start=0; } /* BB_PAD_REPLAY */
+        if (!strcmp(token,"touchpad_left") || !strcmp(token,"touchpad_right")) {
+            injected.buttons|=BTN_TOUCHPAD;
+            injected.touch_side=!strcmp(token,"touchpad_right");
+        }
+        for (size_t i=0;i<sizeof(names)/sizeof(*names);++i) if (!strcmp(token,names[i].name)) injected.buttons|=names[i].ps;
+        for (int i=0;i<4;++i) if (!strncmp(token,sticks[i],3)) { int v=atoi(token+3); injected.stick[i]=v<0 ? 0 : v>255 ? 255 : v; }
+    }
+}
 static void read_inject(void) {
     static const char *path; static int checked; static uint64_t last_check; static struct timespec mtime;
     if (!checked) { path=getenv("BB_PAD_FILE"); checked=1; }
@@ -190,27 +230,12 @@ static void read_inject(void) {
 #endif
     FILE *f=fopen(path,"r");
     if (!f) return;
-    static const struct { const char *name; uint32_t ps; } names[]={
-        {"cross",BTN_CROSS}, {"circle",BTN_CIRCLE}, {"square",BTN_SQUARE}, {"triangle",BTN_TRIANGLE},
-        {"l1",BTN_L1}, {"r1",BTN_R1}, {"l2",BTN_L2}, {"r2",BTN_R2}, {"l3",BTN_L3}, {"r3",BTN_R3},
-        {"options",BTN_OPTIONS}, {"touchpad",BTN_TOUCHPAD},
-        {"up",BTN_UP}, {"down",BTN_DOWN}, {"left",BTN_LEFT}, {"right",BTN_RIGHT},
-    };
-    static const char *sticks[]={"lx=","ly=","rx=","ry="};
-    injected.buttons=0;
-    injected.touch_side=-1;
-    for (int i=0;i<4;++i) injected.stick[i]=-1;
-    char token[64];
-    while (fscanf(f,"%63s",token)==1) {
-        if (!strcmp(token,"replay") && replay_armed!=1) { replay_armed=1; replay_start=0; } /* BB_PAD_REPLAY */
-        if (!strcmp(token,"touchpad_left") || !strcmp(token,"touchpad_right")) {
-            injected.buttons|=BTN_TOUCHPAD;
-            injected.touch_side=!strcmp(token,"touchpad_right");
-        }
-        for (size_t i=0;i<sizeof(names)/sizeof(*names);++i) if (!strcmp(token,names[i].name)) injected.buttons|=names[i].ps;
-        for (int i=0;i<4;++i) if (!strncmp(token,sticks[i],3)) { int v=atoi(token+3); injected.stick[i]=v<0 ? 0 : v>255 ? 255 : v; }
-    }
+    char text[4096];
+    size_t n=fread(text,1,sizeof(text)-1,f);
+    text[n]=0;
     fclose(f);
+    release_at=0;
+    parse_inject(text);
     printf("Runtime: pad file: buttons 0x%x sticks %d %d %d %d\n",injected.buttons,
            injected.stick[0],injected.stick[1],injected.stick[2],injected.stick[3]);
 }
@@ -286,6 +311,10 @@ static void sample(PadData *d) {
     sample_host(d);
     if (bbgpu_overlay_captures_input()) return;
     record_sample(d);
+    if (release_at && reads>=release_at) { /* runtime_pad_press */
+        parse_inject("");
+        release_at=0;
+    }
     read_inject();
     replay_sample(d);
     d->buttons|=injected.buttons;
@@ -364,4 +393,34 @@ static const RuntimeExport exports[]={
     {"scePadSetMotionSensorState",pad_ok_handle_flag},
 };
 uintptr_t runtime_pad_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
+
+/* Control channel (runtime_control.c). */
+void runtime_pad_set(const char *tokens) {
+    host_lock(&lock);
+    release_at=0;
+    parse_inject(tokens);
+    host_unlock(&lock);
+}
+int runtime_pad_press(const char *tokens, unsigned frames, unsigned timeout_ms) {
+    host_lock(&lock);
+    parse_inject(tokens);
+    const size_t until=release_at=reads+(frames ? frames : 1);
+    host_unlock(&lock);
+    const uint64_t deadline=host_monotonic_ns()+(uint64_t)timeout_ms*1000000u;
+    for (;;) { /* sample() releases; another set/press replaces it */
+        host_sleep_ns(2000000);
+        host_lock(&lock);
+        const int ended=release_at!=until, expired=!ended && host_monotonic_ns()>=deadline;
+        if (expired) { parse_inject(""); release_at=0; }
+        const int done=reads>=until;
+        host_unlock(&lock);
+        if (ended || expired) return done ? 0 : -1;
+    }
+}
+void runtime_pad_status(int *is_open, uint64_t *read_count) {
+    host_lock(&lock);
+    *is_open=opened;
+    *read_count=reads;
+    host_unlock(&lock);
+}
 void runtime_pad_report(void) { printf("Runtime: pad reads=%zu, gamepad=%s\n",reads,gamepad ? SDL_GetGamepadName(gamepad) : "none"); }

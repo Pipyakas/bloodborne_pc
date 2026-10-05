@@ -31,6 +31,16 @@ void bbgpu_dump_guest_writes(void *ucontext);
  * no window exists; poll returns 0 typing, 1 confirmed, 2 cancelled (UTF-8 text). */
 int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
+/* Control channel (src/runtime_control.c): completes an open text entry as if typed and
+ * confirmed (0 when none is open); 1 while one is open. */
+int bbgpu_text_input_submit(const char *text_utf8);
+int bbgpu_text_input_active(void);
+/* Frames presented since start. */
+uint64_t bbgpu_present_count(void);
+/* Writes the next presented frame (the game's picture with its HUD, without the settings menu)
+ * to a PNG, scaled down to at most max_width pixels wide (0: full size). 0 on success, -1 when
+ * no frame was presented within timeout_ms or the display format is not supported. */
+int bbgpu_capture_png(const char *path, int max_width, int timeout_ms, int *width, int *height);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
 /* Launch shortcut for this start (bbport.ini "launch", BB_LAUNCH): BbSettings::Launch,
