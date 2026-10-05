@@ -69,7 +69,8 @@ class Game:
             self.pid = None
             SESSION.unlink(missing_ok=True)
 
-    def launch(self, hidden=True, audio=False, build=False, fps_limit=60, game_dir=None, env=None, timeout=300):
+    def launch(self, hidden=True, audio=False, build=False, fps_limit=60, game_dir=None, env=None, args=(),
+               timeout=300):
         if self.running():
             raise Failure('the game is already running (game_stop first)')
         OUT.mkdir(parents=True, exist_ok=True)
@@ -91,6 +92,7 @@ class Game:
             command = [str(msys / 'clang64/bin/python.exe'), str(ROOT / 'scripts/run_windows.py')]
         else:
             command = ['bash', str(ROOT / 'run.sh')]
+        command += [str(a) for a in args]  # the launchers pass them on to bb-probe
         log = open(LOG, 'wb')
         options = dict(cwd=ROOT, env=environment, stdin=subprocess.DEVNULL, stdout=log,
                        stderr=subprocess.STDOUT)
@@ -313,12 +315,15 @@ def capture(max_width):
                     'else the last one used (out/game_dir.txt)'},
        'env': {'type': 'object', 'additionalProperties': {'type': 'string'},
                'description': 'extra environment, e.g. {"BB_UPSCALER": "taa", "BB_PAD_REPLAY": "route.txt"}'},
+       'args': {'type': 'array', 'items': {'type': 'string'},
+                'description': 'bb-probe options, e.g. ["--launch", "continue"]'},
        'timeout_s': {'type': 'number', 'default': 300}})
-def game_launch(hidden=True, audio=False, build=False, fps_limit=60, game_dir=None, env=None, timeout_s=300):
+def game_launch(hidden=True, audio=False, build=False, fps_limit=60, game_dir=None, env=None, args=(),
+                timeout_s=300):
     timeout_s = float(timeout_s) + (1800 if build else 0)  # the build's link-time optimization
     deadline = time.monotonic() + timeout_s
     try:
-        GAME.launch(hidden, audio, build, fps_limit, game_dir, env, timeout_s)
+        GAME.launch(hidden, audio, build, fps_limit, game_dir, env, args, timeout_s)
     except Failure:
         if GAME.process:
             GAME.stop()
@@ -489,6 +494,7 @@ def handle(message):
 
 
 def cli(arguments):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # the log has non-ASCII lines
     name = arguments[0] if arguments[0].startswith('game_') else 'game_' + arguments[0]
     if name not in TOOLS:
         for entry in TOOLS.values():
