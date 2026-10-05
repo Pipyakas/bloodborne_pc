@@ -31,15 +31,18 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     // the desktop is in use); the swapchain keeps the window's size.
     const char* hidden = std::getenv("BB_HIDDEN");
     const char* fullscreen = std::getenv("BB_FULLSCREEN");
-    if (hidden && hidden[0] == '1') {
+    hidden_window = hidden && hidden[0] == '1';
+    if (hidden_window) {
         // Background runs (BB_HIDDEN): never shown, maximised or made full screen.
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true);
     } else {
-        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
-                               fullscreen ? fullscreen[0] == '1' : BbSettings::Get().fullscreen.load());
+        const bool full = fullscreen ? fullscreen[0] == '1' : BbSettings::Get().fullscreen.load();
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, full);
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_MAXIMIZED_BOOLEAN,
                                BbSettings::Get().maximized.load());
+        BbSettings::Get().fullscreen = full; // BB_FULLSCREEN: this start's mode
     }
+    screen_mode = BbSettings::Get().fullscreen ? 2 : BbSettings::Get().maximized ? 1 : 0;
     base_title = title;
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
@@ -131,6 +134,7 @@ bool WindowSDL::PollEvents() {
         BbOverlay::UpdateTextInput(window);
     }
     BbNative::Poll(); // the game's options screen edits the port's settings
+    ApplyScreenMode();
     SDL_Event event;
     UpdateCursor(nullptr);
     while (SDL_PollEvent(&event)) {
@@ -169,7 +173,9 @@ bool WindowSDL::PollEvents() {
         case SDL_EVENT_KEY_DOWN:
             // F11: borderless fullscreen at the desktop size, or back to the window.
             if (event.key.key == SDLK_F11 && !event.key.repeat) {
-                SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+                auto& s = BbSettings::Get();
+                s.fullscreen = !s.fullscreen;
+                BbSettings::Save();
             }
             break;
         case SDL_EVENT_QUIT:
@@ -210,6 +216,23 @@ void WindowSDL::UpdateCursor(const SDL_Event* event) {
     } else if (show && cursor_hidden) {
         SDL_ShowCursor();
         cursor_hidden = false;
+    }
+}
+
+void WindowSDL::ApplyScreenMode() {
+    const auto& s = BbSettings::Get();
+    const int want = s.fullscreen ? 2 : s.maximized ? 1 : 0;
+    if (want == screen_mode || hidden_window) return;
+    screen_mode = want;
+    if (want == 2) {
+        SDL_SetWindowFullscreen(window, true);
+        return;
+    }
+    SDL_SetWindowFullscreen(window, false);
+    if (want == 1) {
+        SDL_MaximizeWindow(window);
+    } else {
+        SDL_RestoreWindow(window);
     }
 }
 

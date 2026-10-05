@@ -26,6 +26,9 @@ extern __thread RuntimeRecoverBuf *runtime_fault_recover;
 void runtime_restart(void);
 /* Native menu rows (runtime_menu.c): rewrites guest call sites before the game starts. */
 unsigned runtime_menu_install(unsigned char *image, uint64_t image_size, unsigned char *stubs);
+/* Live effect switches (runtime_effects.c): hooks the render settings objects and starts the
+ * thread that applies effect changes while the game runs. Returns the hooks installed. */
+unsigned runtime_effects_install(unsigned char *image, uint64_t image_size, unsigned char *stubs);
 /* Our copy of menu files the native menus need (after runtime_file_configure). */
 void runtime_menu_files(const char *user_dir);
 #define ABI __attribute__((sysv_abi))

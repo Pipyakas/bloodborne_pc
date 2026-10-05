@@ -50,6 +50,11 @@ int bbgpu_launch_destination(void);
 int bbgpu_keyboard_controls(void);
 /* 1 while audio output should be silent: "mute", or "mute_background" while unfocused. */
 int bbgpu_audio_muted(void);
+/* 1 while the effect switch `key` (bbport.ini effect_*) is on. */
+int bbgpu_effect_enabled(const char *key);
+/* runtime_effects.c: the game now runs with effect `key` on (1) or off (0), so changing it
+ * needs no restart; -1: it cannot be switched while running (applies after a restart). */
+void bbgpu_effect_live(const char *key, int state);
 /* The port's settings as rows of the game's options screens (runtime_menu.c). The game's
  * widgets edit *value, an int32 (on/off 1/0, a choice index, a slider 0..10; choices are
  * written as int32, the others as its low byte); the GPU library applies and saves changes.

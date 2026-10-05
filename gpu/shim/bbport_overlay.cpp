@@ -366,7 +366,8 @@ void Menu() {
     for (int e = 0; e < BbSettings::EffectCount; ++e) {
         Checkbox(BbSettings::Effects[e].label, s.effects[e]);
     }
-    Hint("Effects are switched on and off by game patches at startup (patches/Bloodborne.xml). "
+    Hint("Effects are switched by game patches (patches/Bloodborne.xml): chromatic aberration, "
+         "depth of field, motion blur and SSAO while the game runs, the others at startup. "
          "Motion blur and shadows from dynamic lights cost noticeable GPU time.");
     Hint("Free camera: hold Cross and press L3 (keyboard: Space + Z). "
          "Debug menu: left touchpad / Tab. Needs DbgFont14h.ccm and DbgFont14h.tpf "
@@ -389,7 +390,8 @@ void Menu() {
     }
 
     ImGui::SeparatorText("Window, input and audio");
-    Checkbox("Start in a maximised window", s.maximized);
+    Checkbox("Full screen (F11)", s.fullscreen);
+    Checkbox("Maximised window", s.maximized);
     Checkbox("Read the gamepad while the window is in the background", s.background_gamepad);
     Checkbox("Hide the mouse cursor (idle 0.5 s or gamepad input)", s.hide_cursor);
     Checkbox("Keyboard controls (WASD, arrows, Enter, Esc...)", s.keyboard_controls);

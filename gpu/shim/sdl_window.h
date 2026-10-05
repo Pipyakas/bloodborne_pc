@@ -51,6 +51,10 @@ private:
     void UpdateCursor(const union SDL_Event* event);
     u64 last_mouse_motion_ms{};
     bool cursor_hidden{};
+    /// Screen mode (fullscreen, maximized settings): 0 window, 1 maximised, 2 full screen.
+    void ApplyScreenMode();
+    int screen_mode{};
+    bool hidden_window{};
     SDL_Window* window{};
     WindowSystemInfo window_info{};
 };

@@ -106,6 +106,8 @@ struct Values {
     int startup_upscaler = UpscalerFsr3;
     bool startup_object_motion = true;
     bool startup_effects[EffectCount]{};
+    /// Effects runtime_effects.c switches while the game runs (startup_effects follows them).
+    std::atomic<bool> live_effects[EffectCount]{};
     int startup_model_lod = 0;
     int startup_output_res = OutputDefault;
     int startup_live_resolution = 0;

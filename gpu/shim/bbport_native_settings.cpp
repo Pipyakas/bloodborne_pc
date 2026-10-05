@@ -65,8 +65,24 @@ const char16_t* const PresetLabels[] = {u"Native", u"Quality", u"Balanced", u"Pe
                                         u"Ultra Performance"};
 const char16_t* const OutputLabels[] = {u"1280 x 720", u"1920 x 1080", u"2560 x 1440",
                                         u"3840 x 2160"};
+// Screen mode: the "fullscreen" and "maximized" settings (fullscreen wins).
+const char16_t* const ScreenModeLabels[] = {u"Windowed", u"Maximised window", u"Full screen"};
+constexpr int ScreenModeCount = 3;
 
+// The choice rows' places in rows[] (their entries are set in Rows).
+enum : int { ScreenModeRow = 0, OutputRow = 1, UpscalerRow = 2, PresetRow = 3 };
 const Row rows[] = {
+    {BB_NATIVE_GRAPHICS, u"Screen mode", u"Window, maximised window or borderless full screen (F11).",
+     Choice, [](const Values& v) { return v.fullscreen ? 2 : v.maximized ? 1 : 0; },
+     [](Values& v, int i) {
+         v.fullscreen = i == 2;
+         if (i < 2) v.maximized = i == 1;
+     },
+     1},
+    {BB_NATIVE_GRAPHICS, u"Output resolution", u"Resolution of the upscaled image and the interface.", Choice,
+     [](const Values& v) { return v.output_res.load(); },
+     [](Values& v, int i) { v.output_res = std::clamp(i, 0, BbSettings::OutputCount - 1); },
+     BbSettings::OutputDefault},
     {BB_NATIVE_GRAPHICS, u"Upscaler", u"Temporal upscaler or anti-aliasing for the 3D scene.", Choice,
      [](const Values& v) {
          for (int i = 0; i < upscaler_count; ++i) {
@@ -79,23 +95,22 @@ const Row rows[] = {
      Choice, [](const Values& v) { return v.preset.load(); },
      [](Values& v, int i) { v.preset = std::clamp(i, 0, BbSettings::PresetCount - 1); },
      BbSettings::NativeAA},
-    {BB_NATIVE_GRAPHICS, u"Output resolution", u"Resolution of the upscaled image and the interface.", Choice,
-     [](const Values& v) { return v.output_res.load(); },
-     [](Values& v, int i) { v.output_res = std::clamp(i, 0, BbSettings::OutputCount - 1); },
-     BbSettings::OutputDefault},
-    {BB_NATIVE_GRAPHICS, u"Sharpening", u"Contrast-adaptive sharpening after upscaling.", Toggle,
-     [](const Values& v) { return v.sharpen ? 1 : 0; },
-     [](Values& v, int on) { v.sharpen = on != 0; }, 1},
-    {BB_NATIVE_GRAPHICS, u"Sharpness", u"Strength of the sharpening.", Slider,
-     [](const Values& v) { return int(std::lround(std::clamp(v.sharpness.load(), 0.0f, 1.0f) * 10)); },
-     [](Values& v, int s) { v.sharpness = float(std::clamp(s, 0, 10)) / 10.0f; }, 3},
-    {BB_NATIVE_EFFECTS, u"Motion blur", u"Camera and object motion blur. Applied after restarting the game.",
+    {BB_NATIVE_GRAPHICS, u"Sharpness", u"Contrast-adaptive sharpening after upscaling (0: off).", Slider,
+     [](const Values& v) {
+         return v.sharpen ? int(std::lround(std::clamp(v.sharpness.load(), 0.0f, 1.0f) * 10)) : 0;
+     },
+     [](Values& v, int s) {
+         v.sharpen = s > 0;
+         if (s > 0) v.sharpness = float(std::clamp(s, 0, 10)) / 10.0f;
+     },
+     3},
+    {BB_NATIVE_EFFECTS, u"Motion blur", u"Camera and object motion blur.",
      Toggle, GetEffect<kMotionBlur>, SetEffect<kMotionBlur>, 1},
-    {BB_NATIVE_EFFECTS, u"Depth of field", u"Background blur. Applied after restarting the game.", Toggle,
+    {BB_NATIVE_EFFECTS, u"Depth of field", u"Background blur.", Toggle,
      GetEffect<kDof>, SetEffect<kDof>, 1},
-    {BB_NATIVE_EFFECTS, u"Chromatic aberration", u"Colour fringes at the screen edges. Applied after restarting the game.",
+    {BB_NATIVE_EFFECTS, u"Chromatic aberration", u"Colour fringes at the screen edges.",
      Toggle, GetEffect<kChromatic>, SetEffect<kChromatic>, 1},
-    {BB_NATIVE_EFFECTS, u"Ambient occlusion", u"Contact shadows (SSAO). Applied after restarting the game.", Toggle,
+    {BB_NATIVE_EFFECTS, u"Ambient occlusion", u"Contact shadows (SSAO).", Toggle,
      GetEffect<kSsao>, SetEffect<kSsao>, 1},
     {BB_NATIVE_EFFECTS, u"Screen space reflections", u"Reflections not in the original game. Applied after restarting the game.",
      Toggle, GetEffect<kSsr>, SetEffect<kSsr>, 0},
@@ -153,13 +168,14 @@ int Rows(int screen, const BbNativeSetting** out) {
         t.choice_count = 0;
         t.choices = nullptr;
     }
-    // The choice rows, in table order: upscaler, preset, output resolution.
-    table[0].choice_count = upscaler_count;
-    table[0].choices = reinterpret_cast<const uint16_t* const*>(upscaler_labels.data());
-    table[1].choice_count = BbSettings::PresetCount;
-    table[1].choices = reinterpret_cast<const uint16_t* const*>(PresetLabels);
-    table[2].choice_count = BbSettings::OutputCount;
-    table[2].choices = reinterpret_cast<const uint16_t* const*>(OutputLabels);
+    table[ScreenModeRow].choice_count = ScreenModeCount;
+    table[ScreenModeRow].choices = reinterpret_cast<const uint16_t* const*>(ScreenModeLabels);
+    table[OutputRow].choice_count = BbSettings::OutputCount;
+    table[OutputRow].choices = reinterpret_cast<const uint16_t* const*>(OutputLabels);
+    table[UpscalerRow].choice_count = upscaler_count;
+    table[UpscalerRow].choices = reinterpret_cast<const uint16_t* const*>(upscaler_labels.data());
+    table[PresetRow].choice_count = BbSettings::PresetCount;
+    table[PresetRow].choices = reinterpret_cast<const uint16_t* const*>(PresetLabels);
     open_once = true;
     int first = 0, count = 0;
     for (int r = 0; r < RowCount; ++r) {

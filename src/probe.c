@@ -854,6 +854,11 @@ int main(int argc, char **argv) {
         printf("Native menu hooks: %u\n", runtime_menu_install(image, size, menu_stubs));
         protect(menu_stubs, page_size, 5);
     }
+    unsigned char *effect_stubs = cpu_only ? NULL : allocate(page_size);
+    if (effect_stubs) {
+        printf("Live effect hooks: %u\n", runtime_effects_install(image, size, effect_stubs));
+        protect(effect_stubs, page_size, 5);
+    }
 #ifdef _WIN32
     printf("Guest thread pointer reads: %" PRIu64 " use TEB TLS slot %u\n", patch_tls_reads(segments, ns), runtime_win_tls_slot());
 #endif
