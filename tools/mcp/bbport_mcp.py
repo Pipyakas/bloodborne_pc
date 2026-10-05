@@ -78,8 +78,8 @@ class Game:
         environment.update(BB_CONTROL='0', BB_FRAME_STATS='1')
         if hidden:
             environment['BB_HIDDEN'] = '1'
-        if not audio:
-            environment['BB_AUDIO'] = 'none'
+        # Silent by default, visible window or not (the user works next to these runs).
+        environment['BB_AUDIO'] = 'sdl' if audio else 'none'
         if not build:
             environment['BB_PREBUILT'] = '1'
         if fps_limit:
@@ -308,7 +308,8 @@ def capture(max_width):
       'ignored) and wait until it reads the pad, i.e. the title screen is loading. Takes 20-90 s; '
       'with build=true the port is rebuilt first (minutes, added to the timeout). Returns the end of the log.',
       {'hidden': {'type': 'boolean', 'default': True, 'description': 'false shows the window (and takes focus)'},
-       'audio': {'type': 'boolean', 'default': False},
+       'audio': {'type': 'boolean', 'default': False,
+                 'description': 'play sound; leave off unless the user asked for it'},
        'build': {'type': 'boolean', 'default': False, 'description': 'rebuild through build.sh first'},
        'fps_limit': {'type': 'integer', 'default': 60, 'description': '0 = uncapped (loads the GPU)'},
        'game_dir': {'type': 'string', 'description': 'folder with eboot.bin; default: BB_GAME_DIR, '
