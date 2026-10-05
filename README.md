@@ -195,18 +195,25 @@ pass), `BB_FSR4_PROFILE=1` (GPU time per FSR 4 pass), `BB_UPSCALER=taa|fsr3|fsr4
 `BB_PAD_RECORD=file` / `BB_PAD_REPLAY=file` (record a route with F9, replay it in scripted tests),
 `BB_GC_BUDGET_MB=N` (texture cache budget, as on integrated GPUs), `BB_PRESENT_DUMP_TRIGGER=file`
 with `BB_PRESENT_DUMP_COUNT=N` (dump N consecutive presented frames), `BB_HIDDEN=1` (the window
-is never shown and the host keyboard and gamepads are ignored), `BB_CONTROL=port` (a line protocol
+is never shown and the host keyboard and gamepads are ignored), `BB_MINIMIZED=1` (create a minimized
+taskbar window without taking focus, ignoring fullscreen settings and host input; silent unless
+`BB_AUDIO` is set; `BB_HIDDEN=1` takes precedence), `BB_CONTROL=port` (a line protocol
 on 127.0.0.1 for pad input, frame waits and PNG screenshots; 0 picks a free port; commands in
 `src/runtime_control.c`).
 
 **Agents (MCP):** `tools/mcp/bbport_mcp.py` (registered in `.mcp.json`, Python standard library
-only) starts the game in the background with `BB_HIDDEN=1`, `BB_AUDIO=none`, no console and a
+only) starts the game in the background with `BB_MINIMIZED=1`, `BB_AUDIO=none`, no console and a
 60 FPS limit, and gives agents `game_launch`, `game_screenshot`, `game_press`, `game_hold`,
 `game_release`, `game_wait`, `game_log`, `game_text`, `game_commands`, `game_status` and
 `game_stop`. Screenshots are read back from the presenter, so the desktop and its focus stay
 untouched; the log is `out/mcp/game.log`. The same tools run from a shell, one call each, the
 game running in between: `python tools/mcp/bbport_mcp.py launch`, `... press tokens=cross`,
 `... screenshot` (prints the PNG's path), `... stop`, `... help`.
+Launches default to a minimized taskbar window, so running instances stay visible in the taskbar.
+You can restore it manually; agent input still uses the control channel and host input stays disabled.
+Use `game_launch(hidden=true)` or `python tools/mcp/bbport_mcp.py launch hidden=true` to hide it
+completely. Use `minimized=false` (with `hidden=false`) for a normal foreground window. Minimized
+launches do not provide foreground focus for features that require it (such as DLSS Frame Generation).
 More in [docs/](docs); recent changes: [docs/CHANGES_2026-10-02.md](docs/CHANGES_2026-10-02.md),
 [docs/CHANGES_2026-10-03.md](docs/CHANGES_2026-10-03.md).
 

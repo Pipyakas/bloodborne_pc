@@ -6,7 +6,7 @@
  *   E Square, Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3,
  *   Enter Options, Tab left touchpad, Backspace right touchpad,
  *   IJKL d-pad (I up, K down, J left, L right).
- * BB_HIDDEN=1 (hidden window, see gpu/shim/window.cpp) ignores the host's gamepad and keyboard:
+ * BB_HIDDEN=1 or BB_MINIMIZED=1 (see gpu/shim/window.cpp) ignores the host's gamepad and keyboard:
  * only scripted input (BB_PAD_FILE, BB_CONTROL) reaches the game. */
 #define _GNU_SOURCE
 #include "runtime.h"
@@ -66,7 +66,10 @@ static uint8_t connected_count;
 static uint64_t now_us(void) { return host_monotonic_ns()/1000u; }
 static int host_input_off(void) {
     static int off=-1;
-    if (off<0) { const char *hidden=getenv("BB_HIDDEN"); off=hidden && hidden[0]=='1'; }
+    if (off<0) {
+        const char *hidden=getenv("BB_HIDDEN"), *minimized=getenv("BB_MINIMIZED");
+        off=(hidden && hidden[0]=='1') || (minimized && minimized[0]=='1');
+    }
     return off;
 }
 static uint8_t axis(int16_t v) { int x=(v+32768)>>8; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }

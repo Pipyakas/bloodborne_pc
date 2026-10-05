@@ -41,6 +41,12 @@ void Swapchain::Create(u32 width_, u32 height_) {
 
     SetSurfaceProperties();
 
+    // Minimized Win32 surfaces can have a zero extent. Never create a zero-sized
+    // swapchain (some drivers crash); the presenter still renders/captures offscreen.
+    if (window.IsMinimized() || !extent.width || !extent.height) {
+        return;
+    }
+
     const std::array queue_family_indices = {
         instance.GetGraphicsQueueFamilyIndex(),
         instance.GetPresentQueueFamilyIndex(),
@@ -103,6 +109,9 @@ void Swapchain::SetHDR(bool hdr) {
 }
 
 bool Swapchain::AcquireNextImage() {
+    if (!swapchain) {
+        return false;
+    }
     vk::Device device = instance.GetDevice();
     vk::Result result =
         device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
@@ -268,7 +277,10 @@ void Swapchain::Destroy() {
 
     if (swapchain) {
         device.destroySwapchainKHR(swapchain);
+        swapchain = nullptr;
     }
+    images.clear();
+    frame_index = image_index = 0;
 
     for (const auto& sem : image_acquired) {
         device.destroySemaphore(sem);

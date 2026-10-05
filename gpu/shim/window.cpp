@@ -26,9 +26,16 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     // BB_HIDDEN=1: the window is never shown (agents driving the game through BB_CONTROL while
     // the desktop is in use); the swapchain keeps the window's size.
     const char* hidden = std::getenv("BB_HIDDEN");
+    const char* minimized = std::getenv("BB_MINIMIZED");
     const char* fullscreen = std::getenv("BB_FULLSCREEN");
     if (hidden && hidden[0] == '1') {
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true);
+    } else if (minimized && minimized[0] == '1') {
+        // Create minimized, rather than showing then minimizing (which can steal focus or
+        // flash on the desktop). SDL's Win32 backend uses SW_SHOWMINNOACTIVE here.
+        // Ignore saved fullscreen settings; the user can restore this window from the taskbar.
+        SDL_SetHintWithPriority(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0", SDL_HINT_OVERRIDE);
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_MINIMIZED_BOOLEAN, true);
     } else {
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
                                fullscreen ? fullscreen[0] == '1' : BbSettings::Get().fullscreen.load());
@@ -37,6 +44,7 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     ASSERT_MSG(window, "Failed to create window: {}", SDL_GetError());
+    is_minimized = (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0;
 
     const char* driver = SDL_GetCurrentVideoDriver();
     const SDL_PropertiesID wp = SDL_GetWindowProperties(window);
@@ -145,6 +153,13 @@ bool WindowSDL::PollEvents() {
             continue;
         }
         switch (event.type) {
+        case SDL_EVENT_WINDOW_MINIMIZED:
+            is_minimized = true;
+            break;
+        case SDL_EVENT_WINDOW_RESTORED:
+        case SDL_EVENT_WINDOW_MAXIMIZED:
+            is_minimized = false;
+            break;
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
         case SDL_EVENT_WINDOW_RESIZED: {
             int w = 0, h = 0;
