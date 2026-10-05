@@ -157,12 +157,19 @@ void Hint(const char* text) {
 void Menu() {
     auto& s = BbSettings::Get();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.0f * base_scale,
-                                   viewport->WorkPos.y + 40.0f * base_scale),
-                            ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(620.0f * base_scale, 0.0f), ImGuiCond_Appearing);
+    // A dock space over the whole window: the menu opens docked in it (full screen) unless
+    // "overlay_docked" is off; its tab undocks it. The game shows through empty space.
+    const ImGuiID dock = ImGui::DockSpaceOverViewport(0, viewport, ImGuiDockNodeFlags_PassthruCentralNode);
+    if (s.overlay_docked) {
+        ImGui::SetNextWindowDockID(dock, ImGuiCond_Appearing);
+    } else {
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.0f * base_scale,
+                                       viewport->WorkPos.y + 40.0f * base_scale),
+                                ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(ImVec2(620.0f * base_scale, 0.0f), ImGuiCond_Appearing);
+    }
     bool keep_open = true;
-    if (!ImGui::Begin("Bloodborne — settings  (Insert / L3+R3)", &keep_open,
+    if (!ImGui::Begin("Bloodborne — settings  (F1 / L3+R3)", &keep_open,
                       ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
@@ -359,7 +366,8 @@ void Menu() {
     for (int e = 0; e < BbSettings::EffectCount; ++e) {
         Checkbox(BbSettings::Effects[e].label, s.effects[e]);
     }
-    Hint("Effects are switched on and off by game patches at startup (patches/Bloodborne.xml). "
+    Hint("Effects are switched by game patches (patches/Bloodborne.xml): chromatic aberration, "
+         "depth of field, motion blur and SSAO while the game runs, the others at startup. "
          "Motion blur and shadows from dynamic lights cost noticeable GPU time.");
     Hint("Free camera: hold Cross and press L3 (keyboard: Space + Z). "
          "Debug menu: left touchpad / Tab. Needs DbgFont14h.ccm and DbgFont14h.tpf "
@@ -379,6 +387,34 @@ void Menu() {
             BbSettings::Save();
             runtime_restart();
         }
+    }
+
+    ImGui::SeparatorText("Window, input and audio");
+    Checkbox("Full screen (F11)", s.fullscreen);
+    Checkbox("Maximised window", s.maximized);
+    Checkbox("Read the gamepad while the window is in the background", s.background_gamepad);
+    Checkbox("Hide the mouse cursor (idle 0.5 s or gamepad input)", s.hide_cursor);
+    Checkbox("Keyboard controls (WASD, arrows, Enter, Esc...)", s.keyboard_controls);
+    ImGui::SameLine();
+    Hint("Off: the keyboard no longer plays the game, so its keys stay free for other "
+         "programs' hotkeys. F1 still opens this menu.");
+    Checkbox("Open this menu docked full screen", s.overlay_docked);
+    Checkbox("Mute all audio", s.mute);
+    Checkbox("Mute while the window is in the background", s.mute_background);
+    {
+        const int launch = s.launch_saved;
+        if (ImGui::BeginCombo("Launch into", BbSettings::LaunchLabel(launch))) {
+            for (int i = 0; i < BbSettings::LaunchCount; ++i) {
+                if (ImGui::Selectable(BbSettings::LaunchLabel(i), i == launch)) {
+                    Store(s.launch_saved, i, true); // the next start's
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        Hint("At the next start the title screen's rows are selected for you: Play Offline, then "
+             "the chosen row. Continue without a save stops at the menu. --launch NAME (title, "
+             "offline, continue, load, new_game, system) overrides it for one start.");
     }
 
     ImGui::SeparatorText("Other");
@@ -430,7 +466,8 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr; // window positions are not kept
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad |
+                      ImGuiConfigFlags_DockingEnable;
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
     io.BackendPlatformName = "bbport";
 
@@ -478,7 +515,7 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
         return;
     }
     initialized = true;
-    std::printf("Overlay: menu ready (Insert or L3+R3)\n");
+    std::printf("Overlay: menu ready (F1 or L3+R3)\n");
 }
 
 void UpdateTextInput(SDL_Window* window) {
@@ -507,9 +544,10 @@ bool HandleEvent(const SDL_Event& event) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
         const bool down = event.type == SDL_EVENT_KEY_DOWN;
-        if (down && !event.key.repeat &&
-            (event.key.key == SDLK_INSERT || (is_open && event.key.key == SDLK_ESCAPE))) {
-            SetOpen(event.key.key == SDLK_INSERT ? !is_open : false);
+        // F1 (Insert, the old key, still works) toggles; Escape closes.
+        const bool toggle = event.key.key == SDLK_F1 || event.key.key == SDLK_INSERT;
+        if (down && !event.key.repeat && (toggle || (is_open && event.key.key == SDLK_ESCAPE))) {
+            SetOpen(toggle ? !is_open : false);
             return true;
         }
         if (!is_open) {

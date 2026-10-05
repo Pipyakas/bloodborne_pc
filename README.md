@@ -46,7 +46,7 @@ Mesa/RADV) has been tested thoroughly.
   and draws are bound and recorded on another (two-stage pipeline), with a Vulkan recording
   thread and helper threads for memory copies. Early on the single GPU thread capped the game
   at ~26 FPS; now it runs at 90–150 FPS depending on resolution and scene.
-- **In-game menu** (Insert or L3+R3): upscaler, preset, sharpness, output resolution, game
+- **In-game menu** (F1 or L3+R3): upscaler, preset, sharpness, output resolution, game
   effects (chromatic aberration, DoF, motion blur, SSAO, the game's own AA, SSR, model LOD).
 - **GTK4 launcher** and an **AppImage** for the Steam Deck.
 
@@ -129,9 +129,9 @@ and conflicts with *Enemy Control*.
 For the game debug menu, install `DbgFont14h.ccm` and `DbgFont14h.tpf` from
 [Debug Menu and XML Patch](https://www.nexusmods.com/bloodborne/mods/253) into the game's
 `dvdroot_ps4/font/` first. Startup rejects missing or empty font files instead of launching
-the unsafe patch. Open it with the left touchpad / Tab; Backspace is the right touchpad.
+the unsafe patch. Open it with the left touchpad / G; Backspace is the right touchpad.
 Touch coordinates are forwarded from SDL gamepads; Back/Select emulates a left click on
-pads without a touch surface. The port's settings menu remains Insert / L3+R3.
+pads without a touch surface. The port's settings menu is F1 / L3+R3.
 
 GPU occlusion queries still use synthetic pixel counters (`PixelPipeStatDump`), and
 `IT_SET_PREDICATION` is unimplemented. Free camera allows visual investigation; it does
@@ -251,7 +251,7 @@ Windows: `setup.bat` compiles `tools\setup\BbportSetup.cs` with the C# compiler 
    The first start builds the port (a few minutes; `build.sh` in the CLANG64 environment) into
    `out\bb-probe.exe`. The game folder is remembered: afterwards `run.bat` alone starts the game.
    `BB_PREBUILT=1` skips the build check. Settings, saves, mods and patches use the same files as
-   on Linux (`bbport.ini`, `user\`, `mods\`, `patches\`); the in-game menu (Insert or L3+R3)
+   on Linux (`bbport.ini`, `user\`, `mods\`, `patches\`); the in-game menu (F1 or L3+R3)
    changes the settings. `fullscreen=1` in `bbport.ini` (or F11 in the game) gives a
    borderless window at the desktop size; with `output_res=3840x2160` and `preset=1` (FSR 3.1
    Quality, scene 2560x1440) the RTX 4090 above stays at the 120 Hz display limit. The GTK

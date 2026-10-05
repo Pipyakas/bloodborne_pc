@@ -562,14 +562,22 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         return;
     }
 
+    // bbport: recreating the swapchain waits for the device to go idle, and vkDeviceWaitIdle
+    // needs every queue externally synchronised: hold the submit lock so the GPU thread cannot
+    // submit meanwhile (racing it lost the device when the window was maximised on Windows).
+    const auto recreate_swapchain = [&] {
+        std::scoped_lock submit_lock{Scheduler::submit_mutex};
+        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+    };
+
     // Recreate the swapchain if the window was resized or was created minimized.
     if (!swapchain.GetHandle() || window.GetWidth() != swapchain.GetWidth() ||
         window.GetHeight() != swapchain.GetHeight()) {
-        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+        recreate_swapchain();
     }
 
     if (!swapchain.AcquireNextImage()) {
-        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+        recreate_swapchain();
         if (!swapchain.AcquireNextImage()) {
             // User resizes the window too fast and GPU can't keep up. Skip this frame.
             LOG_WARNING(Render_Vulkan, "Skipping frame!");

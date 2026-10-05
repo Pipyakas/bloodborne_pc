@@ -43,6 +43,41 @@ uint64_t bbgpu_present_count(void);
 int bbgpu_capture_png(const char *path, int max_width, int timeout_ms, int *width, int *height);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
+/* Launch shortcut for this start (bbport.ini "launch", BB_LAUNCH): BbSettings::Launch,
+ * 0 title screen, 1 Play Offline menu, 2 continue, 3 load game, 4 new game, 5 system. */
+int bbgpu_launch_destination(void);
+/* 1 while the keyboard plays the game ("keyboard_controls"). */
+int bbgpu_keyboard_controls(void);
+/* 1 while audio output should be silent: "mute", or "mute_background" while unfocused. */
+int bbgpu_audio_muted(void);
+/* 1 while the effect switch `key` (bbport.ini effect_*) is on. */
+int bbgpu_effect_enabled(const char *key);
+/* runtime_effects.c: the game now runs with effect `key` on (1) or off (0), so changing it
+ * needs no restart; -1: it cannot be switched while running (applies after a restart). */
+void bbgpu_effect_live(const char *key, int state);
+/* The port's settings as rows of the game's options screens (runtime_menu.c). The game's
+ * widgets edit *value, an int32 (on/off 1/0, a choice index, a slider 0..10; choices are
+ * written as int32, the others as its low byte); the GPU library applies and saves changes.
+ * Strings are UTF-16, static. A screen shows five rows (the movie's row sprites). */
+enum { BB_NATIVE_TOGGLE = 0, BB_NATIVE_CHOICE = 1, BB_NATIVE_SLIDER = 2 };
+typedef struct {
+    const uint16_t *label, *help;
+    int32_t kind, choice_count;
+    const uint16_t *const *choices;
+    int32_t *value;
+    const int32_t *default_value;
+} BbNativeSetting;
+enum { BB_NATIVE_GRAPHICS = 0, BB_NATIVE_EFFECTS = 1, BB_NATIVE_SCREENS = 2 };
+/* Screen `screen`'s rows, their values read from the settings (call when it opens; choices
+ * still pending from a previous opening are applied first). */
+int bbgpu_native_settings(int32_t screen, const BbNativeSetting **rows);
+/* Screen titles and the options-list rows that open them (label, one-line help). */
+const uint16_t *bbgpu_native_screen_text(int32_t screen, int32_t which);
+/* The screen closed: applies the choice rows (on/off and sliders apply at once). */
+void bbgpu_native_settings_commit(void);
+/* A choice row's "dropdown open" byte in the game's row widget: its choice applies as soon
+ * as the dropdown closes (it reads 0); without one, when the screen closes. */
+void bbgpu_native_settings_dropdown(const BbNativeSetting *row, const volatile uint8_t *open);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
 #ifdef __cplusplus

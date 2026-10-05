@@ -269,6 +269,36 @@ extern "C" int bbgpu_handle_fault(void* ucontext, void* address) {
     return Core::Signals::Instance()->DispatchAccessViolation(ucontext, address) ? 1 : 0;
 }
 
+extern "C" int bbgpu_launch_destination(void) {
+    return BbSettings::Get().launch;
+}
+
+extern "C" int bbgpu_keyboard_controls(void) {
+    return BbSettings::Get().keyboard_controls;
+}
+
+extern "C" int bbgpu_audio_muted(void) {
+    const auto& s = BbSettings::Get();
+    return s.mute || (s.mute_background && !s.window_focused);
+}
+
+extern "C" int bbgpu_effect_enabled(const char* key) {
+    const auto& s = BbSettings::Get();
+    for (int e = 0; e < BbSettings::EffectCount; ++e) {
+        if (std::string_view{BbSettings::Effects[e].key} == key) return s.effects[e] ? 1 : 0;
+    }
+    return 0;
+}
+
+extern "C" void bbgpu_effect_live(const char* key, int state) {
+    auto& s = BbSettings::Get();
+    for (int e = 0; e < BbSettings::EffectCount; ++e) {
+        if (std::string_view{BbSettings::Effects[e].key} != key) continue;
+        s.live_effects[e] = state >= 0;
+        if (state >= 0) s.startup_effects[e] = state != 0;
+    }
+}
+
 extern "C" unsigned bbgpu_symbol_count(void) {
     return unsigned(g_symbols.size());
 }
