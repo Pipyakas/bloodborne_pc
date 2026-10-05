@@ -7,6 +7,7 @@
 #include "common/types.h"
 
 struct SDL_Window;
+union SDL_Event;
 
 namespace Frontend {
 
@@ -43,6 +44,10 @@ private:
     int text_state{};
     std::string text, text_prompt, base_title;
     void UpdateTextTitle();
+    /// Cursor hiding (hide_cursor): shown on mouse motion, hidden after a pause or a pad input.
+    void UpdateCursor(const union SDL_Event* event);
+    u64 last_mouse_motion_ms{};
+    bool cursor_hidden{};
     SDL_Window* window{};
     WindowSystemInfo window_info{};
 };

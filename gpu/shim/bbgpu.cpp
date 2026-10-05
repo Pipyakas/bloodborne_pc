@@ -269,6 +269,19 @@ extern "C" int bbgpu_handle_fault(void* ucontext, void* address) {
     return Core::Signals::Instance()->DispatchAccessViolation(ucontext, address) ? 1 : 0;
 }
 
+extern "C" int bbgpu_launch_destination(void) {
+    return BbSettings::Get().launch;
+}
+
+extern "C" int bbgpu_keyboard_controls(void) {
+    return BbSettings::Get().keyboard_controls;
+}
+
+extern "C" int bbgpu_audio_muted(void) {
+    const auto& s = BbSettings::Get();
+    return s.mute || (s.mute_background && !s.window_focused);
+}
+
 extern "C" unsigned bbgpu_symbol_count(void) {
     return unsigned(g_symbols.size());
 }

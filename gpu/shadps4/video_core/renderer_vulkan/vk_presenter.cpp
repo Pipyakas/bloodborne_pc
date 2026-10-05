@@ -517,16 +517,39 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         }
     };
 
+    // bbport: recreating the swapchain waits for the device to go idle, and vkDeviceWaitIdle
+    // needs every queue externally synchronised: hold the submit lock so the GPU thread cannot
+    // submit meanwhile (racing it lost the device when the window was maximised on Windows).
+    const auto recreate_swapchain = [&] {
+        std::scoped_lock submit_lock{Scheduler::submit_mutex};
+        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+    };
+
     // Recreate the swapchain if the window was resized.
     if (window.GetWidth() != swapchain.GetWidth() || window.GetHeight() != swapchain.GetHeight()) {
-        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+        recreate_swapchain();
     }
 
     if (!swapchain.AcquireNextImage()) {
-        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+        recreate_swapchain();
         if (!swapchain.AcquireNextImage()) {
             // User resizes the window too fast and GPU can't keep up. Skip this frame.
             LOG_WARNING(Render_Vulkan, "Skipping frame!");
+            // bbport: the frame returns to the free queue with its present fence still
+            // signalled from its last use, so GetRenderFrame would not wait for the copy into
+            // it that this present was going to wait on, and a resize frees the image there.
+            // Wait for that copy here so the GPU never writes a freed image.
+            const vk::SemaphoreWaitInfo ready{
+                .semaphoreCount = 1,
+                .pSemaphores = &frame->ready_semaphore,
+                .pValues = &frame->ready_tick,
+            };
+            const auto wait_result =
+                instance.GetDevice().waitSemaphores(&ready, std::numeric_limits<u64>::max());
+            if (wait_result != vk::Result::eSuccess) {
+                LOG_WARNING(Render_Vulkan, "Waiting for a skipped frame failed: {}",
+                            vk::to_string(wait_result));
+            }
             free_frame();
             return;
         }

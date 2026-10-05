@@ -9,6 +9,7 @@
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 
 namespace Vulkan {
@@ -90,6 +91,8 @@ void Swapchain::SetHDR(bool hdr) {
         return;
     }
 
+    // bbport: vkDeviceWaitIdle needs every queue externally synchronised (see Present).
+    std::scoped_lock submit_lock{Scheduler::submit_mutex};
     auto result = instance.GetDevice().waitIdle();
     if (result != vk::Result::eSuccess) {
         LOG_WARNING(ImGui, "Failed to wait for Vulkan device idle on mode change: {}",
@@ -112,6 +115,11 @@ bool Swapchain::AcquireNextImage() {
     case vk::Result::eSuccess:
         break;
     case vk::Result::eSuboptimalKHR:
+        // bbport: the image was acquired and its semaphore will be signalled, so it must be
+        // presented: destroying the swapchain now would destroy a semaphore with a pending
+        // signal. Present it, and recreate after the present (which reports the same state).
+        needs_recreation = true;
+        return true;
     case vk::Result::eErrorSurfaceLostKHR:
     case vk::Result::eErrorOutOfDateKHR:
     case vk::Result::eErrorUnknown:

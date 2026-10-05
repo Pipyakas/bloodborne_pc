@@ -5,6 +5,7 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "sdl_window.h"
+#include "bbport_native_settings.h"
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
 
@@ -12,6 +13,9 @@ namespace Frontend {
 
 WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}, height{height_} {
     // Gamepads are sampled by runtime_pad.c; their events are pumped here with the window's.
+    // SDL drops gamepad state while another window has focus unless asked not to.
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,
+                BbSettings::Get().background_gamepad ? "1" : "0");
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         UNREACHABLE_MSG("Failed to initialize SDL video: {}", SDL_GetError());
     }
@@ -26,6 +30,8 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     const char* fullscreen = std::getenv("BB_FULLSCREEN");
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
                            fullscreen ? fullscreen[0] == '1' : BbSettings::Get().fullscreen.load());
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_MAXIMIZED_BOOLEAN,
+                           BbSettings::Get().maximized.load());
     base_title = title;
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
@@ -94,8 +100,14 @@ bool WindowSDL::PollEvents() {
     if (!text_active) {
         BbOverlay::UpdateTextInput(window);
     }
+    BbNative::Poll(); // the game's options screen edits the port's settings
     SDL_Event event;
+    UpdateCursor(nullptr);
     while (SDL_PollEvent(&event)) {
+        UpdateCursor(&event);
+        if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED || event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+            BbSettings::Get().window_focused = event.type == SDL_EVENT_WINDOW_FOCUS_GAINED;
+        }
         if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
             std::scoped_lock lock{text_mutex};
             if (event.type == SDL_EVENT_TEXT_INPUT) {
@@ -139,6 +151,36 @@ bool WindowSDL::PollEvents() {
         }
     }
     return is_open;
+}
+
+void WindowSDL::UpdateCursor(const SDL_Event* event) {
+    constexpr u64 IdleMs = 500;
+    // Stick motion below this (of 32767) is drift, not input.
+    constexpr int AxisThreshold = 8000;
+    const u64 now = SDL_GetTicks();
+    bool show = false, hide = false;
+    if (!event) {
+        hide = now - last_mouse_motion_ms >= IdleMs;
+    } else if (event->type == SDL_EVENT_MOUSE_MOTION || event->type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+               event->type == SDL_EVENT_MOUSE_WHEEL) {
+        last_mouse_motion_ms = now;
+        show = true;
+    } else if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+               (event->type == SDL_EVENT_GAMEPAD_AXIS_MOTION &&
+                (event->gaxis.value > AxisThreshold || event->gaxis.value < -AxisThreshold))) {
+        hide = true;
+    }
+    if (!BbSettings::Get().hide_cursor) {
+        hide = false;
+        show = cursor_hidden;
+    }
+    if (hide && !cursor_hidden) {
+        SDL_HideCursor();
+        cursor_hidden = true;
+    } else if (show && cursor_hidden) {
+        SDL_ShowCursor();
+        cursor_hidden = false;
+    }
 }
 
 } // namespace Frontend

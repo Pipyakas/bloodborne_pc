@@ -22,6 +22,10 @@ inline bool IsFrameUpscaler(int upscaler) {
 }
 enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, PresetCount };
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
+/// Launch shortcut (runtime_menu.c): where the game goes at start, as if the title screen's
+/// rows were selected. Applied once per start; without a save Continue stops at the menu.
+enum Launch : int { LaunchTitle = 0, LaunchOffline, LaunchContinue, LaunchLoad, LaunchNewGame,
+                    LaunchSystem, LaunchCount };
 
 /// Game effects switched by the community patches at start (patches.py EFFECTS): ini key,
 /// menu label, default (the game's own behaviour).
@@ -75,6 +79,24 @@ struct Values {
     /// Live resolution and preset changes (run.sh): 0 off by default (startup patch, fastest
     /// on the Steam Deck and older GPUs), -1 auto (strong discrete GPUs), 1 on. On restart.
     std::atomic<int> live_resolution{0};
+    /// Window and input (on start): a maximised window; gamepads read while unfocused.
+    std::atomic<bool> maximized{true};
+    std::atomic<bool> background_gamepad{true};
+    /// Mouse cursor hidden after 500 ms without motion, or at once on gamepad input.
+    std::atomic<bool> hide_cursor{true};
+    /// The keyboard plays the game (runtime_pad.c); off leaves the keys to other programs.
+    std::atomic<bool> keyboard_controls{true};
+    /// The settings menu opens docked over the whole window (drag its tab to undock).
+    std::atomic<bool> overlay_docked{true};
+    /// Audio: everything muted, or muted while the window is not focused.
+    std::atomic<bool> mute{false};
+    std::atomic<bool> mute_background{true};
+    /// Launch shortcut (BB_LAUNCH, --launch override it for one start). Read at start.
+    std::atomic<int> launch{LaunchContinue};
+    /// The file's choice, written back by Save (an override is not saved).
+    std::atomic<int> launch_saved{LaunchContinue};
+    /// Set by the window thread.
+    std::atomic<bool> window_focused{true};
     /// Why FSR 4 cannot run (assets, device features), or null. Set by the renderer.
     std::atomic<const char*> fsr4_problem{nullptr};
     std::atomic<bool> fsr4_supported{false}, fsr411_supported{false}, dlss_supported{false};
@@ -106,5 +128,9 @@ void Save();
 float PresetScale(int preset);
 const char* PresetName(int preset);
 const char* UpscalerName(int upscaler);
+/// bbport.ini / --launch names: title, offline, continue, load, new_game, system.
+const char* LaunchName(int launch);
+/// Menu label of a launch shortcut.
+const char* LaunchLabel(int launch);
 
 } // namespace BbSettings

@@ -1,0 +1,240 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: the port's settings as rows of the game's own options screen (runtime_menu.c adds
+// the "Graphics" screen). The game's widgets edit one byte per row; the window thread
+// (Poll) turns changed bytes into settings and saves them.
+#include "bbport_native_settings.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdio>
+#include <mutex>
+#include <string>
+#include <string_view>
+
+#include "../bbgpu.h"
+#include "bbport_settings.h"
+
+namespace BbNative {
+
+namespace {
+
+using BbSettings::Values;
+
+enum Kind : int32_t { Toggle = BB_NATIVE_TOGGLE, Choice = BB_NATIVE_CHOICE, Slider = BB_NATIVE_SLIDER };
+
+/// One row: how the byte is read from and written to the settings.
+struct Row {
+    int screen; ///< BB_NATIVE_GRAPHICS or BB_NATIVE_EFFECTS
+    const char16_t* label;
+    const char16_t* help;
+    Kind kind;
+    int (*get)(const Values&);
+    void (*set)(Values&, int);
+    int default_value;
+};
+
+int EffectIndex(const char* key) {
+    for (int e = 0; e < BbSettings::EffectCount; ++e) {
+        if (std::string_view{BbSettings::Effects[e].key} == key) return e;
+    }
+    return 0;
+}
+template <const char* Key>
+int GetEffect(const Values& v) {
+    return v.effects[EffectIndex(Key)] ? 1 : 0;
+}
+template <const char* Key>
+void SetEffect(Values& v, int on) {
+    v.effects[EffectIndex(Key)] = on != 0;
+}
+constexpr char kMotionBlur[] = "effect_motion_blur";
+constexpr char kDof[] = "effect_dof";
+constexpr char kChromatic[] = "effect_chromatic_aberration";
+constexpr char kSsao[] = "effect_ssao";
+constexpr char kSsr[] = "effect_ssr";
+
+// The upscaler choices offered: the ones this GPU runs (the renderer checks them at start).
+std::array<int, BbSettings::UpscalerCount> upscalers{};
+int upscaler_count = 0;
+const char16_t* const UpscalerLabels[BbSettings::UpscalerCount] = {
+    u"Off", u"FSR 3.1", u"FSR 4", u"FSR 4.1.1", u"TAA", u"DLSS"};
+std::array<const char16_t*, BbSettings::UpscalerCount> upscaler_labels{};
+
+const char16_t* const PresetLabels[] = {u"Native", u"Quality", u"Balanced", u"Performance",
+                                        u"Ultra Performance"};
+const char16_t* const OutputLabels[] = {u"1280 x 720", u"1920 x 1080", u"2560 x 1440",
+                                        u"3840 x 2160"};
+
+const Row rows[] = {
+    {BB_NATIVE_GRAPHICS, u"Upscaler", u"Temporal upscaler or anti-aliasing for the 3D scene.", Choice,
+     [](const Values& v) {
+         for (int i = 0; i < upscaler_count; ++i) {
+             if (upscalers[i] == v.upscaler) return i;
+         }
+         return 0;
+     },
+     [](Values& v, int i) { v.upscaler = upscalers[std::clamp(i, 0, upscaler_count - 1)]; }, 1},
+    {BB_NATIVE_GRAPHICS, u"Upscaling quality", u"Render resolution: Native renders at the output resolution.",
+     Choice, [](const Values& v) { return v.preset.load(); },
+     [](Values& v, int i) { v.preset = std::clamp(i, 0, BbSettings::PresetCount - 1); },
+     BbSettings::NativeAA},
+    {BB_NATIVE_GRAPHICS, u"Output resolution", u"Resolution of the upscaled image and the interface.", Choice,
+     [](const Values& v) { return v.output_res.load(); },
+     [](Values& v, int i) { v.output_res = std::clamp(i, 0, BbSettings::OutputCount - 1); },
+     BbSettings::OutputDefault},
+    {BB_NATIVE_GRAPHICS, u"Sharpening", u"Contrast-adaptive sharpening after upscaling.", Toggle,
+     [](const Values& v) { return v.sharpen ? 1 : 0; },
+     [](Values& v, int on) { v.sharpen = on != 0; }, 1},
+    {BB_NATIVE_GRAPHICS, u"Sharpness", u"Strength of the sharpening.", Slider,
+     [](const Values& v) { return int(std::lround(std::clamp(v.sharpness.load(), 0.0f, 1.0f) * 10)); },
+     [](Values& v, int s) { v.sharpness = float(std::clamp(s, 0, 10)) / 10.0f; }, 3},
+    {BB_NATIVE_EFFECTS, u"Motion blur", u"Camera and object motion blur. Applied after restarting the game.",
+     Toggle, GetEffect<kMotionBlur>, SetEffect<kMotionBlur>, 1},
+    {BB_NATIVE_EFFECTS, u"Depth of field", u"Background blur. Applied after restarting the game.", Toggle,
+     GetEffect<kDof>, SetEffect<kDof>, 1},
+    {BB_NATIVE_EFFECTS, u"Chromatic aberration", u"Colour fringes at the screen edges. Applied after restarting the game.",
+     Toggle, GetEffect<kChromatic>, SetEffect<kChromatic>, 1},
+    {BB_NATIVE_EFFECTS, u"Ambient occlusion", u"Contact shadows (SSAO). Applied after restarting the game.", Toggle,
+     GetEffect<kSsao>, SetEffect<kSsao>, 1},
+    {BB_NATIVE_EFFECTS, u"Screen space reflections", u"Reflections not in the original game. Applied after restarting the game.",
+     Toggle, GetEffect<kSsr>, SetEffect<kSsr>, 0},
+};
+constexpr int RowCount = int(sizeof(rows) / sizeof(rows[0]));
+
+std::mutex mutex;
+
+std::string Ascii(const char16_t* text) {
+    std::string out;
+    for (; *text; ++text) out += *text < 128 ? char(*text) : '?';
+    return out;
+}
+std::array<BbNativeSetting, RowCount> table{};
+// One aligned int32 per row: the game's choice rows write all four bytes.
+std::array<int32_t, RowCount> values{}, applied{}, defaults{};
+bool open_once = false;
+// The game's "dropdown open" bytes of the open screen's choice rows (guest memory).
+std::array<const volatile uint8_t*, RowCount> dropdown_open{};
+
+void BuildChoices() {
+    const auto& v = BbSettings::Get();
+    upscaler_count = 0;
+    for (int u = 0; u < BbSettings::UpscalerCount; ++u) {
+        const bool supported = (u != BbSettings::UpscalerFsr4 || v.fsr4_supported) &&
+                               (u != BbSettings::UpscalerFsr411 || v.fsr411_supported) &&
+                               (u != BbSettings::UpscalerDlss || v.dlss_supported);
+        if (supported) {
+            upscalers[upscaler_count] = u;
+            upscaler_labels[upscaler_count] = UpscalerLabels[u];
+            ++upscaler_count;
+        }
+    }
+}
+
+} // namespace
+
+void Apply(bool choices);
+
+int Rows(int screen, const BbNativeSetting** out) {
+    Apply(true); // what a previous opening left pending
+    std::scoped_lock lock{mutex};
+    dropdown_open.fill(nullptr);
+    BuildChoices();
+    const auto& v = BbSettings::Get();
+    for (int r = 0; r < RowCount; ++r) {
+        values[r] = applied[r] = rows[r].get(v);
+        defaults[r] = rows[r].default_value;
+        auto& t = table[r];
+        t.label = reinterpret_cast<const uint16_t*>(rows[r].label);
+        t.help = reinterpret_cast<const uint16_t*>(rows[r].help);
+        t.kind = rows[r].kind;
+        t.value = &values[r];
+        t.default_value = &defaults[r];
+        t.choice_count = 0;
+        t.choices = nullptr;
+    }
+    // The choice rows, in table order: upscaler, preset, output resolution.
+    table[0].choice_count = upscaler_count;
+    table[0].choices = reinterpret_cast<const uint16_t* const*>(upscaler_labels.data());
+    table[1].choice_count = BbSettings::PresetCount;
+    table[1].choices = reinterpret_cast<const uint16_t* const*>(PresetLabels);
+    table[2].choice_count = BbSettings::OutputCount;
+    table[2].choices = reinterpret_cast<const uint16_t* const*>(OutputLabels);
+    open_once = true;
+    int first = 0, count = 0;
+    for (int r = 0; r < RowCount; ++r) {
+        if (rows[r].screen != screen) continue;
+        if (!count) first = r;
+        ++count;
+    }
+    *out = table.data() + first;
+    return count;
+}
+
+void Poll() {
+    Apply(false);
+}
+
+/// Applies changed bytes: on/off and sliders always, choices (dropdowns write the hovered
+/// entry) only when `choices`.
+void Apply(bool choices) {
+    std::scoped_lock lock{mutex};
+    if (!open_once) return;
+    bool changed = false;
+    auto& v = BbSettings::Get();
+    for (int r = 0; r < RowCount; ++r) {
+        // What the game's widget wrote (the guest thread): a choice writes the int32, the
+        // on/off and slider rows its low byte.
+        const int32_t raw = reinterpret_cast<volatile int32_t&>(values[r]);
+        const int32_t now = rows[r].kind == Choice ? raw : (raw & 0xff);
+        // A choice applies when its dropdown has closed (cancel restores the value), or when
+        // the screen closes; the dropdown writes the entry under the cursor while open.
+        const bool settled = choices || rows[r].kind != Choice ||
+                             (dropdown_open[r] && *dropdown_open[r] == 0);
+        if (now != applied[r] && settled) {
+            std::printf("Settings: game menu: %s %d -> %d\n", Ascii(rows[r].label).c_str(),
+                        applied[r], now);
+            applied[r] = now;
+            rows[r].set(v, now);
+            changed = true;
+        }
+    }
+    if (changed) {
+        BbSettings::Save();
+    }
+}
+
+void WatchDropdown(const BbNativeSetting* row, const volatile uint8_t* open) {
+    std::scoped_lock lock{mutex};
+    const auto r = row - table.data();
+    if (r >= 0 && r < RowCount) dropdown_open[size_t(r)] = open;
+}
+
+void ForgetDropdowns() {
+    std::scoped_lock lock{mutex};
+    dropdown_open.fill(nullptr); // the screen and its widgets are gone
+}
+
+} // namespace BbNative
+
+extern "C" int bbgpu_native_settings(int32_t screen, const BbNativeSetting** rows) {
+    return BbNative::Rows(screen, rows);
+}
+
+extern "C" const uint16_t* bbgpu_native_screen_text(int32_t screen, int32_t which) {
+    static const char16_t* const texts[BB_NATIVE_SCREENS][2] = {
+        {u"Graphics", u"Upscaler, render and output resolution, sharpening."},
+        {u"Effects", u"Motion blur, depth of field and other post effects."},
+    };
+    return reinterpret_cast<const uint16_t*>(texts[std::clamp(screen, 0, BB_NATIVE_SCREENS - 1)][which & 1]);
+}
+
+extern "C" void bbgpu_native_settings_commit(void) {
+    BbNative::Apply(true);
+    BbNative::ForgetDropdowns();
+}
+
+extern "C" void bbgpu_native_settings_dropdown(const BbNativeSetting* row,
+                                               const volatile uint8_t* open) {
+    BbNative::WatchDropdown(row, open);
+}
