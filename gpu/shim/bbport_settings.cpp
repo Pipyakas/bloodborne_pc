@@ -60,6 +60,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.model_lod = std::clamp(i, -2, 2);
     } else if (key == "fullscreen") {
         v.fullscreen = i != 0;
+    } else if (key == "frame_limit") {
+        v.frame_limit = std::clamp(i, 0, 120);
     } else if (key == "maximized") {
         v.maximized = i != 0;
     } else if (key == "background_gamepad") {
@@ -218,9 +220,9 @@ void Save() {
     std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\nfullscreen=%d\n", v.model_lod.load(),
                  OutputWidths[v.output_res], OutputHeights[v.output_res], int(v.fullscreen.load()));
     std::fprintf(file,
-                 "maximized=%d\nbackground_gamepad=%d\nhide_cursor=%d\nmute=%d\nmute_background=%d\n"
+                 "maximized=%d\nframe_limit=%d\nbackground_gamepad=%d\nhide_cursor=%d\nmute=%d\nmute_background=%d\n"
                  "launch=%s\nkeyboard_controls=%d\noverlay_docked=%d\n",
-                 int(v.maximized.load()), int(v.background_gamepad.load()),
+                 int(v.maximized.load()), v.frame_limit.load(), int(v.background_gamepad.load()),
                  int(v.hide_cursor.load()), int(v.mute.load()), int(v.mute_background.load()),
                  LaunchName(v.launch_saved), int(v.keyboard_controls.load()),
                  int(v.overlay_docked.load()));

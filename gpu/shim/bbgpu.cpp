@@ -185,6 +185,10 @@ u32 BbDisplayRefreshHz() {
     return hz;
 }
 
+u32 BbFrameLimitSetting() {
+    return u32(std::max(BbSettings::Get().frame_limit.load(), 0));
+}
+
 #ifdef BB_PGO_GENERATE
 extern "C" void __gcov_dump(void);
 extern "C" void __gcov_reset(void);
