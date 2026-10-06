@@ -115,7 +115,25 @@ static ABI uint64_t tsc_frequency(void) {
 uint64_t runtime_process_time_us(void) { return process_time(); }
 uint64_t runtime_process_time_counter(void) { return process_time_counter(); }
 uint64_t runtime_tsc_frequency(void) { return tsc_frequency(); }
-static int sleep_ns(uint64_t ns) { host_sleep_ns(ns); return 0; }
+/* BB_SLEEP_STATS=1: guest sleep requests by length, every 5 s (spin vs timer tuning). */
+static void sleep_stats(uint64_t ns) {
+    static int enabled=-1;
+    static uint64_t counts[6], total_ns, last;
+    static const char *names[6]={"0","<0.2ms","<0.6ms","<1ms","<3ms",">=3ms"};
+    if (enabled<0) enabled=getenv("BB_SLEEP_STATS")!=NULL;
+    if (!enabled) return;
+    const int b=ns==0 ? 0 : ns<200000 ? 1 : ns<600000 ? 2 : ns<1000000 ? 3 : ns<3000000 ? 4 : 5;
+    __atomic_fetch_add(&counts[b],1,__ATOMIC_RELAXED);
+    __atomic_fetch_add(&total_ns,ns,__ATOMIC_RELAXED);
+    const uint64_t now=host_monotonic_ns();
+    uint64_t seen=__atomic_load_n(&last,__ATOMIC_RELAXED);
+    if (now-seen<5000000000ull || !__atomic_compare_exchange_n(&last,&seen,now,0,__ATOMIC_RELAXED,__ATOMIC_RELAXED)) return;
+    if (!seen) return;
+    printf("Sleep stats (5 s):");
+    for (int i=0;i<6;++i) printf(" %s %llu", names[i], (unsigned long long)__atomic_exchange_n(&counts[i],0,__ATOMIC_RELAXED));
+    printf("; requested %.0f ms\n", __atomic_exchange_n(&total_ns,0,__ATOMIC_RELAXED)/1e6);
+}
+static int sleep_ns(uint64_t ns) { sleep_stats(ns); host_sleep_ns(ns); return 0; }
 static ABI int32_t kernel_usleep(uint32_t usec) { sleep_ns((uint64_t)usec*1000); return 0; }
 static ABI int32_t posix_usleep(uint32_t usec) { sleep_ns((uint64_t)usec*1000); return 0; }
 static ABI uint32_t posix_sleep(uint32_t seconds) { sleep_ns((uint64_t)seconds*1000000000); return 0; }
