@@ -214,6 +214,14 @@ struct DlssUpscaler::Impl {
         bool hdr;
         bool operator==(const Key&) const = default;
     } key{};
+    /// Features of earlier configurations, most recent last, reused when their configuration
+    /// returns. Releasing a feature right before creating the next one (a live preset or
+    /// output change) sometimes left DLSS output striped until a later re-creation: NGX
+    /// recycles a released feature's internal resources into the new one. The oldest beyond
+    /// kMaxFeatures is released only after its replacement exists (2026-10-06: no stripes in
+    /// 24 switches with 2 kept; Transformer features at 4K take 300-450 MB each).
+    static constexpr size_t kMaxFeatures = 3;
+    std::vector<std::pair<Key, NgxHandle*>> features;
 
     Impl(const Instance& instance_, Scheduler& scheduler_)
         : instance{instance_}, scheduler{scheduler_} {}
@@ -370,6 +378,15 @@ struct DlssUpscaler::Impl {
         return text;
     }
 
+    void Announce(int preset, const char* feature_state) {
+        const int active = key.ngx_preset ? key.ngx_preset : BbSettings::DlssAutoPreset(preset);
+        BbSettings::Get().dlss_active_preset = active;
+        std::printf("DLSS: %ux%u -> %ux%u, quality mode %d, preset %c%s, %s, %s input (%s)\n",
+                    key.render_width, key.render_height, key.out_width, key.out_height,
+                    key.quality, char('A' + active - 1), key.ngx_preset ? "" : " (auto)",
+                    BbSettings::DlssGeneration(active), key.hdr ? "HDR" : "LDR", feature_state);
+    }
+
     bool Record(const Fsr4Upscaler::Frame& f) {
         if (!available) {
             return false;
@@ -379,12 +396,19 @@ struct DlssUpscaler::Impl {
         const Key wanted{f.render_width, f.render_height, f.output.width, f.output.height,
                          Quality(f.preset), BbSettings::DlssModels[model].ngx_preset,
                          IsFloatFormat(f.color.format)};
-        if (!feature || !(wanted == key)) {
-            if (feature) {
-                scheduler.Finish(); // the feature's resources may still be in use
-                release_feature(feature);
-                feature = nullptr;
+        if (feature && !(wanted == key)) {
+            features.emplace_back(key, feature);
+            feature = nullptr;
+            const auto cached = std::ranges::find_if(
+                features, [&](const auto& entry) { return entry.first == wanted; });
+            if (cached != features.end()) {
+                feature = cached->second;
+                key = wanted;
+                features.erase(cached);
+                Announce(f.preset, "kept from earlier");
             }
+        }
+        if (!feature) {
             SetUI(params, "CreationNodeMask", 1);
             SetUI(params, "VisibilityNodeMask", 1);
             SetUI(params, "Width", wanted.render_width);
@@ -414,13 +438,14 @@ struct DlssUpscaler::Impl {
                 return false;
             }
             key = wanted;
-            const int active =
-                key.ngx_preset ? key.ngx_preset : BbSettings::DlssAutoPreset(f.preset);
-            BbSettings::Get().dlss_active_preset = active;
-            std::printf("DLSS: %ux%u -> %ux%u, quality mode %d, preset %c%s, %s, %s input\n",
-                        key.render_width, key.render_height, key.out_width, key.out_height,
-                        key.quality, char('A' + active - 1), key.ngx_preset ? "" : " (auto)",
-                        BbSettings::DlssGeneration(active), key.hdr ? "HDR" : "LDR");
+            Announce(f.preset, "new");
+            // Release the oldest only now that its replacement exists, and once the GPU is
+            // done with it.
+            if (features.size() > kMaxFeatures) {
+                scheduler.DeferOperation(
+                    [release = release_feature, old = features.front().second] { release(old); });
+                features.erase(features.begin());
+            }
         }
         ResourceVk color = Resource(f.color, vk::ImageAspectFlagBits::eColor, false);
         ResourceVk depth = Resource(f.depth, vk::ImageAspectFlagBits::eDepth, false);
@@ -456,6 +481,9 @@ struct DlssUpscaler::Impl {
         scheduler.Finish();
         if (feature) {
             release_feature(feature);
+        }
+        for (const auto& [unused, cached] : features) {
+            release_feature(cached);
         }
         if (params) {
             destroy_parameters(params);

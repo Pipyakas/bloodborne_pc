@@ -233,6 +233,10 @@ bool TemporalUpscaler::Active() const {
            !BbToggle::Disabled(1u << 24);
 }
 
+bool TemporalUpscaler::UsesNgx() const {
+    return dlss && BbSettings::Get().upscaler == BbSettings::UpscalerDlss;
+}
+
 bool TemporalUpscaler::ReactiveOn() const {
     // FSR 4 takes no reactive mask: the opaque snapshot and the mask pass would be wasted.
     return BbSettings::Get().reactive && !BbToggle::Disabled(1u << 27) && !UseFsr4() &&
@@ -428,45 +432,49 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     }
 
     const auto allocator = instance.GetAllocator();
-    motion_view.reset();
-    output_view.reset();
-    motion_image = VideoCore::UniqueImage(device, allocator);
-    motion_image.Create(vk::ImageCreateInfo{
-        .imageType = vk::ImageType::e2D,
-        .format = vk::Format::eR16G16Sfloat,
-        .extent = {w, h, 1},
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = vk::SampleCountFlagBits::e1,
-        .tiling = vk::ImageTiling::eOptimal,
-        .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
-        .initialLayout = vk::ImageLayout::eUndefined,
-    });
-    output_image = VideoCore::UniqueImage(device, allocator);
-    output_image.Create(vk::ImageCreateInfo{
-        .imageType = vk::ImageType::e2D,
-        .format = vk::Format::eR16G16B16A16Sfloat,
-        .extent = {ow, oh, 1},
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = vk::SampleCountFlagBits::e1,
-        .tiling = vk::ImageTiling::eOptimal,
-        .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
-                 vk::ImageUsageFlagBits::eTransferSrc,
-        .initialLayout = vk::ImageLayout::eUndefined,
-    });
-    output_view = Check(device.createImageViewUnique({
-        .image = vk::Image(output_image),
-        .viewType = vk::ImageViewType::e2D,
-        .format = vk::Format::eR16G16B16A16Sfloat,
-        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
-    }));
-    motion_view = Check(device.createImageViewUnique({
-        .image = vk::Image(motion_image),
-        .viewType = vk::ImageViewType::e2D,
-        .format = vk::Format::eR16G16Sfloat,
-        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
-    }));
+    // Park the previous size's motion and output images, then reuse or create this size's.
+    for (auto* pooled : {&motion_image, &output_image}) {
+        if (*pooled) {
+            auto& view = pooled == &motion_image ? motion_view : output_view;
+            image_pool.push_back({std::move(*pooled), std::move(view)});
+        }
+    }
+    const auto pooled_image = [&](VideoCore::UniqueImage& image, vk::UniqueImageView& view,
+                                  vk::Format format, u32 iw, u32 ih, vk::ImageUsageFlags usage) {
+        const auto it = std::ranges::find_if(image_pool, [&](const PooledImage& p) {
+            return p.image.image_ci.format == format && p.image.image_ci.extent.width == iw &&
+                   p.image.image_ci.extent.height == ih && p.image.image_ci.usage == usage;
+        });
+        if (it != image_pool.end()) {
+            image = std::move(it->image);
+            view = std::move(it->view);
+            image_pool.erase(it);
+            return;
+        }
+        image = VideoCore::UniqueImage(device, allocator);
+        image.Create(vk::ImageCreateInfo{
+            .imageType = vk::ImageType::e2D,
+            .format = format,
+            .extent = {iw, ih, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk::SampleCountFlagBits::e1,
+            .tiling = vk::ImageTiling::eOptimal,
+            .usage = usage,
+            .initialLayout = vk::ImageLayout::eUndefined,
+        });
+        view = Check(device.createImageViewUnique({
+            .image = vk::Image(image),
+            .viewType = vk::ImageViewType::e2D,
+            .format = format,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        }));
+    };
+    pooled_image(motion_image, motion_view, vk::Format::eR16G16Sfloat, w, h,
+                 vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled);
+    pooled_image(output_image, output_view, vk::Format::eR16G16B16A16Sfloat, ow, oh,
+                 vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+                     vk::ImageUsageFlagBits::eTransferSrc);
     const auto make_image = [&](VideoCore::UniqueImage& image, vk::UniqueImageView& view,
                                 vk::Format format, vk::ImageUsageFlags usage, u32 iw = 0,
                                 u32 ih = 0, vk::ImageAspectFlags aspect =
@@ -1033,9 +1041,11 @@ void TemporalUpscaler::Run() {
     if (reduced) {
         VideoCore::ImageViewInfo ci;
         ci.format = color.info.pixel_format;
-        const auto c = scene_targets.Read(scene_color, ci);
+        constexpr auto stages = vk::PipelineStageFlagBits2::eComputeShader;
+        constexpr auto access = vk::AccessFlagBits2::eShaderRead;
+        const auto c = scene_targets.Read(scene_color, ci, stages, access, UsesNgx());
         ci.format = depth.info.pixel_format;
-        const auto d = scene_targets.Read(camera_motion.Depth(), ci);
+        const auto d = scene_targets.Read(camera_motion.Depth(), ci, stages, access, UsesNgx());
         input_color = c.image;
         input_depth = d.image;
         input_color_view = c.view;
@@ -1556,8 +1566,10 @@ void TemporalUpscaler::RunScaled() {
         VideoCore::ImageViewInfo ci, di;
         ci.format = color.info.pixel_format;
         di.format = depth_format;
-        const auto cp = scene_targets.Read(ldr_target, ci);
-        const auto dp = scene_targets.Read(camera_motion.Depth(), di);
+        constexpr auto stages = vk::PipelineStageFlagBits2::eComputeShader;
+        constexpr auto access = vk::AccessFlagBits2::eShaderRead;
+        const auto cp = scene_targets.Read(ldr_target, ci, stages, access, UsesNgx());
+        const auto dp = scene_targets.Read(camera_motion.Depth(), di, stages, access, UsesNgx());
         color_image = cp.image;
         color_view = cp.view;
         depth_image = dp.image;

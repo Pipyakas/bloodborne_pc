@@ -40,9 +40,10 @@ public:
         vk::ImageUsageFlags usage;
     };
     Target Attachment(VideoCore::ImageId, const VideoCore::ImageViewInfo&);
+    /// `ngx`: DLSS reads the proxy, so it is parked instead of destroyed on resize (`parked`).
     Target Read(VideoCore::ImageId, const VideoCore::ImageViewInfo&,
                 vk::PipelineStageFlags2 = vk::PipelineStageFlagBits2::eComputeShader,
-                vk::AccessFlags2 = vk::AccessFlagBits2::eShaderRead);
+                vk::AccessFlags2 = vk::AccessFlagBits2::eShaderRead, bool ngx = false);
     /// Resolve/invalidate only the accessed mip levels; no range means the whole image.
     void NativeAccess(VideoCore::Image&, vk::AccessFlags2,
                       std::optional<VideoCore::SubresourceRange> = {});
@@ -84,6 +85,7 @@ private:
         std::vector<std::pair<VideoCore::ImageViewInfo, vk::UniqueImageView>> views;
         vk::ImageLayout layout = vk::ImageLayout::eUndefined;
         SceneResolution::Coherence state;
+        bool kept = false; ///< read by DLSS: parked, not destroyed, on resize
     };
     static constexpr u64 Key(u64 uid, u32 level) {
         return uid << 4 | level;
@@ -110,6 +112,11 @@ private:
     Lookup lookup;
     SceneResolution::Size size;
     std::unordered_map<u64, std::unique_ptr<Entry>> entries; ///< by Key(uid, level)
+    /// Proxies the upscaler read, from earlier sizes. NGX caches image views by handle: a
+    /// destroyed view whose handle the driver reuses for a new proxy makes DLSS read through
+    /// the stale cache entry (striped, smeared output after live preset or output changes).
+    /// They stay alive for the session and are reused when their size returns.
+    std::vector<std::unique_ptr<Entry>> parked;
     std::unordered_set<u64> tracked; ///< uids with proxies
     bool copying = false;
     bool force_stencil_bits = false; ///< test the portable resampler on any driver

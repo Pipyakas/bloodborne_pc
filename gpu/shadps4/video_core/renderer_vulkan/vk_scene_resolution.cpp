@@ -106,6 +106,9 @@ bool SceneTargets::SetSize(SceneResolution::Size next) {
     if (next == size) return false;
     ResolveAll();
     scheduler.Finish();
+    for (auto& [key, entry] : entries) {
+        if (entry->kept) parked.push_back(std::move(entry));
+    }
     entries.clear(); // no command buffer can still reference these images/views
     tracked.clear();
     ++generation;
@@ -403,6 +406,23 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level, bool fi
     }
     auto& entry = entries[key];
     original.scene_proxy = true;
+    const auto proxy = ProxySize(original, level);
+    const auto format = original.backing->image.image_ci.format;
+    const auto parked_entry = std::ranges::find_if(parked, [&](const auto& p) {
+        return p->uid == original.image_uid && p->level == level &&
+               p->image.image_ci.extent.width == proxy.width &&
+               p->image.image_ci.extent.height == proxy.height &&
+               p->image.image_ci.format == format;
+    });
+    if (!entry && parked_entry != parked.end()) {
+        // Same images and views as before: no new handles for NGX. The content is stale.
+        entry = std::move(*parked_entry);
+        parked.erase(parked_entry);
+        entry->source = id;
+        entry->layout = vk::ImageLayout::eUndefined;
+        entry->state = {};
+        tracked.insert(original.image_uid);
+    }
     if (!entry) {
         entry = std::make_unique<Entry>();
         entry->source = id;
@@ -411,7 +431,6 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level, bool fi
         entry->image = VideoCore::UniqueImage(instance.GetDevice(), instance.GetAllocator());
         auto ci = original.backing->image.image_ci;
         ci.pNext = nullptr;
-        const auto proxy = ProxySize(original, level);
         ci.extent = vk::Extent3D{proxy.width, proxy.height, 1};
         ci.mipLevels = 1;
         entry->image.Create(ci);
@@ -560,9 +579,11 @@ std::optional<SceneTargets::Target> SceneTargets::SampleProxy(
 }
 SceneTargets::Target SceneTargets::Read(VideoCore::ImageId id,
                                        const VideoCore::ImageViewInfo& info,
-                                       vk::PipelineStageFlags2 stages, vk::AccessFlags2 access) {
+                                       vk::PipelineStageFlags2 stages, vk::AccessFlags2 access,
+                                       bool ngx) {
     auto& original = *lookup(id, 0);
     auto& e = Get(id);
+    e.kept |= ngx;
     Transition(e, original.aspect_mask, vk::ImageLayout::eGeneral, stages, access);
     return {e.image, View(e, original, info), e.layout, e.image.image_ci.usage};
 }

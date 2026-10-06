@@ -145,6 +145,8 @@ private:
     void PrepareUiDepth(VideoCore::ImageId depth);
     /// Render size below the scaled-preset output size (the resolution patch is on).
     [[nodiscard]] bool Scaled() const;
+    /// DLSS records this frame: its input proxies must outlive resizes (SceneTargets::parked).
+    [[nodiscard]] bool UsesNgx() const;
     /// A target of the patched render size: the game allocates it with aligned dimensions
     /// (a 1916x1078 scene in 1916x1080 targets).
     [[nodiscard]] bool RenderTarget(u32 w, u32 h) const {
@@ -255,6 +257,13 @@ private:
     VideoCore::UniqueImage output_image;
     vk::UniqueImageView motion_view;
     vk::UniqueImageView output_view;
+    /// Motion and output images of earlier sizes, kept for the session: DLSS (NGX) caches
+    /// image views by handle (see SceneTargets::parked).
+    struct PooledImage {
+        VideoCore::UniqueImage image;
+        vk::UniqueImageView view;
+    };
+    std::vector<PooledImage> image_pool;
     VideoCore::UniqueImage opaque_image;   ///< scene color before the blended draws
     VideoCore::UniqueImage reactive_image; ///< R8 reactive mask
     vk::UniqueImageView opaque_view;
