@@ -35,21 +35,26 @@ model in one gameplay process, including output captures and camera movement.
 `out/taa-launcher-validation.log` checks actual GTK controls and saved settings.
 TAA has not yet been tested on the tester's GTX 1060.
 
-## FG selection must not lock an inactive generator to 30 FPS (2026-10-06)
+## The FPS limit belongs to base rendering, not generated output (2026-10-06)
 
 Selecting 4x used to apply a Reflex render cap of display refresh / 4 immediately. When
 DLSS-G presented only one frame per rendered frame, this held a 120 Hz session at 30 FPS.
 The status UI also called this "Generating frames" because the plugin returned status OK.
 
-The divided cap now requires `numFramesActuallyPresented > 1` and a successful status.
-It uses the confirmed multiplier (bounded by the requested multiplier) and the selected
-frame-rate limit, not just the monitor refresh. Off, dynamic, unavailable status, rejected
-options and failed presentation do not apply this additional cap. Size/mode changes discard
-the old confirmation. The ordinary presenter limit remains in effect. A requested but
-inactive generator now reports that no generated frames are being presented.
+The first correction applied the division only to confirmed generation. That still treated
+the selected FPS limit as an output target, which is not the user's requested behavior.
+Reflex and the ordinary presenter now use the selected **base-frame** limit without dividing
+it by FG: 40 real FPS with 4x generation targets 160 presented FPS, including on a 120 Hz
+screen. A GPU capable of 40 real FPS remains free to render 40 when FG starts. Off, dynamic,
+2x, 3x and 4x use the same base cap. Explicit uncapped runs (`BB_FPS_LIMIT=0`) stay uncapped.
 
-`frame-gen-pacing-test` covers inactive FG at 120 Hz, confirmed 2x/3x/4x, lower selected limits,
-off/dynamic and uncapped configurations. In a hidden, silent run using a copy of the user's
+Generation status still requires `numFramesActuallyPresented > 1`, not just status OK.
+Size/mode changes discard old confirmation, and a requested but inactive generator reports
+that no generated frames are being presented. These diagnostics do not change the base cap.
+
+`frame-gen-pacing-test` covers 40/120/60/30 real-frame limits and uncapped configurations;
+the pacing helper accepts no multiplier, preventing FG from dividing the base limit.
+In the prior hidden, silent run using a copy of the user's
 4K CNN Ultra Performance settings/saves, selecting 120 FPS + FG 4x yielded 60.8-61.5 rendered
 FPS while the plugin reported 1x. This validates removal of the false 30 FPS cap, not working
 frame generation in a hidden window or attainment of 120 FPS on this GPU.

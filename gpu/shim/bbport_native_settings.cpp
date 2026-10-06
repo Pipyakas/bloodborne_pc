@@ -105,7 +105,7 @@ const Row rows[] = {
      [](const Values& v) { return v.output_res.load(); },
      [](Values& v, int i) { v.output_res = std::clamp(i, 0, BbSettings::OutputCount - 1); },
      BbSettings::OutputDefault, [](const char16_t* const** out) { return Labels(OutputLabels, out); }},
-    {BB_NATIVE_SCREEN, u"Frame rate limit", u"Highest frame rate (the game's timing holds up to 120 FPS).",
+    {BB_NATIVE_SCREEN, u"Frame rate limit", u"Caps real rendered frames (up to 120 FPS). Frame generation adds frames on top.",
      Choice,
      [](const Values& v) {
          for (int i = 0; i < BbSettings::FrameLimitCount; ++i) {
