@@ -20,6 +20,7 @@ FPS_PRESETS={'30':[],'60':['60 FPS++'],'90':['90 FPS++'],'uncap':['Uncap FPS++']
 # Upscaler presets (bbport.ini "preset", the in-game menu): output / render size ratio. The game
 # then renders at 1920x1080 / ratio and the port's temporal upscaler restores the output size.
 OUTPUT_SIZE=(1920,1080)
+DEFAULT_OUTPUT_SIZE=(2560,1440) # bbport.ini without output_res (bbport_settings.h OutputDefault)
 PRESET_SCALES=[1.0,1.5,1.7,2.0,3.0]
 # The community patch changes two independent consumers: the game render/window setup
 # and the UI movie viewport. Keep the latter at native size so glyph rasterisation and
@@ -86,8 +87,8 @@ def render_size(settings,override=''):
     if override:
         w,h=(int(v) for v in override.lower().split('x'))
         return (w,h)
-    if settings.get('upscaler','fsr3')=='off': return None
-    preset=int(settings.get('preset','0') or 0)
+    if settings.get('upscaler','dlss')=='off': return None
+    preset=int(settings.get('preset','3') or 0)
     scale=PRESET_SCALES[max(0,min(preset,len(PRESET_SCALES)-1))]
     if scale==1.0: return None
     # Even sizes (the game has half-resolution buffers).
@@ -95,13 +96,13 @@ def render_size(settings,override=''):
 
 
 def output_size(settings):
-    """Output (UI) size from bbport.ini output_res, e.g. 3840x2160; 1920x1080 by default."""
+    """Output (UI) size from bbport.ini output_res, e.g. 3840x2160; 2560x1440 by default."""
     try:
         w,h=(int(v) for v in settings.get('output_res','').lower().split('x'))
         if w>0 and h>0: return (w,h)
     except ValueError:
         pass
-    return OUTPUT_SIZE
+    return DEFAULT_OUTPUT_SIZE
 
 
 def scaled_sizes(settings):
@@ -111,8 +112,8 @@ def scaled_sizes(settings):
     out=output_size(settings)
     if out==OUTPUT_SIZE or settings.get('upscaler')=='taa': return None
     scale=1.0
-    if settings.get('upscaler','fsr3')!='off':
-        preset=int(settings.get('preset','0') or 0)
+    if settings.get('upscaler','dlss')!='off':
+        preset=int(settings.get('preset','3') or 0)
         scale=PRESET_SCALES[max(0,min(preset,len(PRESET_SCALES)-1))]
     render=tuple(max(2,round(v/scale/2)*2) for v in out)
     # A scene of exactly 1920x1080 (4K Performance) is indistinguishable from the game's UI

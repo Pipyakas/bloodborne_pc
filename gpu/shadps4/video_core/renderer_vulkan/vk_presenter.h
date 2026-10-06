@@ -37,6 +37,7 @@ struct Frame {
     u64 ready_tick;
     bool is_hdr{false};
     u8 id{};
+    int fg_inputs = -1; ///< bbport: frame generation inputs taken at its flip (vk_frame_gen.h)
 
 };
 

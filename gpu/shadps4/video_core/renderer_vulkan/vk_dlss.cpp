@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -209,6 +210,7 @@ struct DlssUpscaler::Impl {
     struct Key {
         u32 render_width, render_height, out_width, out_height;
         int quality;
+        int ngx_preset;
         bool hdr;
         bool operator==(const Key&) const = default;
     } key{};
@@ -372,8 +374,11 @@ struct DlssUpscaler::Impl {
         if (!available) {
             return false;
         }
+        const auto& settings = BbSettings::Get();
+        const int model = std::clamp(settings.dlss_model.load(), 0, BbSettings::DlssModelCount - 1);
         const Key wanted{f.render_width, f.render_height, f.output.width, f.output.height,
-                         Quality(f.preset), IsFloatFormat(f.color.format)};
+                         Quality(f.preset), BbSettings::DlssModels[model].ngx_preset,
+                         IsFloatFormat(f.color.format)};
         if (!feature || !(wanted == key)) {
             if (feature) {
                 scheduler.Finish(); // the feature's resources may still be in use
@@ -387,6 +392,12 @@ struct DlssUpscaler::Impl {
             SetUI(params, "OutWidth", wanted.out_width);
             SetUI(params, "OutHeight", wanted.out_height);
             SetI(params, "PerfQualityValue", wanted.quality);
+            // The model (render preset) for every quality mode; 0 = the driver's default.
+            for (const char* mode : {"DLAA", "Quality", "Balanced", "Performance",
+                                     "UltraPerformance", "UltraQuality"}) {
+                SetUI(params, (std::string("DLSS.Hint.Render.Preset.") + mode).c_str(),
+                      unsigned(wanted.ngx_preset));
+            }
             // Motion vectors at render resolution, without jitter; standard depth.
             int flags = FlagMvLowRes;
             if (wanted.hdr) {
@@ -403,9 +414,13 @@ struct DlssUpscaler::Impl {
                 return false;
             }
             key = wanted;
-            std::printf("DLSS: %ux%u -> %ux%u, quality mode %d, %s input\n", key.render_width,
-                        key.render_height, key.out_width, key.out_height, key.quality,
-                        key.hdr ? "HDR" : "LDR");
+            const int active =
+                key.ngx_preset ? key.ngx_preset : BbSettings::DlssAutoPreset(f.preset);
+            BbSettings::Get().dlss_active_preset = active;
+            std::printf("DLSS: %ux%u -> %ux%u, quality mode %d, preset %c%s, %s, %s input\n",
+                        key.render_width, key.render_height, key.out_width, key.out_height,
+                        key.quality, char('A' + active - 1), key.ngx_preset ? "" : " (auto)",
+                        BbSettings::DlssGeneration(active), key.hdr ? "HDR" : "LDR");
         }
         ResourceVk color = Resource(f.color, vk::ImageAspectFlagBits::eColor, false);
         ResourceVk depth = Resource(f.depth, vk::ImageAspectFlagBits::eDepth, false);
