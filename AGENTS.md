@@ -1,5 +1,30 @@
 # Agent workflow
 
+## Single playable branch (owner decision, 2026-10-06)
+
+- Use `master` in `C:\code\bloodborne_pc` for ongoing port work and the user's
+  testing. Do not ask the user to launch a separate task-worktree build.
+- Do not create new task branches/worktrees for this port unless explicitly
+  requested. Existing branches are historical; preserve them and their dirty
+  work until their owners have reviewed/integrated it.
+- Coordinate shared-checkout edits, integration, builds and GPU tests before
+  starting. The single-checkout policy does not authorize overwriting peers' work.
+- Build and test runtime changes before publishing them to `origin/master`.
+  Clearly report unfinished work; do not enable unverified experiments by default.
+
+## Curated decomp research
+
+- Curated experimental research notes are consolidated on `master`.
+  See `research/decomp/README.md` for scope, provenance and limitations.
+- Do not publish game binaries/assets/saves, memory captures, Ghidra projects,
+  bulk game-code exports or proprietary SDKs. Keep those inputs private on d1.
+- All decomp workers, harness development and decomp GPU/runtime testing belong
+  on d1. Preserved Windows decomp work is a backup, not an active worker checkout.
+- Never use GPT-6.1 (any provider/alias/variant) for subagents or detached workers,
+  even when free workers stall. The user's main composer selection is unaffected.
+- Publishing research notes does not authorize enabling experimental decomp
+  replacements or rebuilding the playable executable for notes alone.
+
 ## Definition of done: update the playable master build
 
 The user tests the port through the **Bloodborne (bbport)** Start menu shortcut.
@@ -64,14 +89,13 @@ Before reporting implementation work as finished:
    is blocked, say so explicitly; do not claim either the Start menu build or
    GitHub has been updated when it has not.
 
-## Publish unfinished work separately
+## Unfinished work
 
-Do not leave task work local-only: commit coherent task-owned changes and push
-your task branch to the same fork, even when not yet ready for `master`. Clearly
-label incomplete or experimental work as WIP and report limitations and tests
-that failed or have not run. This is not permission to merge unverified work,
-claim it is ready for users, or publish someone else's uncommitted changes.
-If no safe commit can be made, report the blocker instead.
+Do not create a separate playable branch for unfinished work. Validate runtime
+changes before publishing them on `master`; if blocked, report the exact pending
+work and preserve it. Coherent documentation or tooling may be published with
+an honest WIP status when it does not enable unfinished runtime behavior.
+Never discard or publish someone else's uncommitted changes without review.
 
 ## Shared-checkout safety
 

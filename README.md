@@ -1,5 +1,9 @@
 # Pipyakas/bloodborne_pc — Windows-focused fork
 
+**Experimental reverse-engineering research notes:** Start with
+[the published research snapshot](research/decomp/README.md). This is separate
+from playable `master`, not a standalone decompiled game or a tested replacement build.
+
 **Start here: [Fork aims and release policy](README.fork.md).** Our primary target
 is a downloadable Windows executable release after every successful `master` push.
 Automatic GitHub binary releases are not implemented yet; a source push alone is
