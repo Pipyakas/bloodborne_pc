@@ -2,7 +2,8 @@
 // bbport setup for Windows (setup.bat compiles this with the C# compiler of .NET Framework 4,
 // which every Windows 10/11 has: C# 5, no other dependencies).
 //
-// One window: the game folder and the settings, then Install / Update, which installs MSYS2
+// One window: the game folder (or the game's .pkg files, installed by PkgInstall.cs) and the
+// settings, then Install / Update, which installs MSYS2
 // (to C:\msys64, or BB_MSYS2) and the packages README "Windows" lists, gets the sources and their
 // submodules, optionally downloads the DLSS and FSR 4 models, builds out\bb-probe.exe, and writes
 // bbport.ini, out\game_dir.txt, Bloodborne.cmd (the launcher: frame rate, game language, present
@@ -110,7 +111,7 @@ class SetupForm : Form {
     ComboBox resolution, frameRate, upscaler, preset, live, modelLod, language, presentMode;
     CheckBox fullscreen, showFps, sharpen, dlssModel, fsr4Models, desktopLink, startMenuLink;
     readonly List<KeyValuePair<string, CheckBox>> effects = new List<KeyValuePair<string, CheckBox>>();
-    Button installButton, saveButton, playButton;
+    Button installButton, saveButton, playButton, pkgButton;
     TabControl tabs;
     TabPage logPage;
     ProgressBar progress;
@@ -191,6 +192,10 @@ class SetupForm : Form {
         AddRow(folders, "Game folder", gameBox, Browse(gameBox, "The Bloodborne v1.09 dump: the folder with eboot.bin and sce_sys"));
         gameStatus = Note("");
         AddSpan(folders, gameStatus);
+        pkgButton = new Button { Text = "Install from .pkg files...", AutoSize = true };
+        pkgButton.Click += delegate { InstallPackages(); };
+        AddSpan(folders, Flow(pkgButton, Note("No dump yet? Choose the game's .pkg and its 1.09 update .pkg: they are "
+                                              + "installed into one folder, which becomes the game folder.")));
         column.Controls.Add(folders.Parent);
 
         // Display.
@@ -378,30 +383,67 @@ class SetupForm : Form {
         return map != null && map.TryGetValue(key, out value) ? value : null;
     }
 
-    /// The PS4 param.sfo key/value table: magic "\0PSF", then the key and data table offsets and
-    /// 16-byte entries (key offset, format, length, max length, data offset).
-    static Dictionary<string, string> ReadParamSfo(string path) {
-        try {
-            byte[] d = File.ReadAllBytes(path);
-            if (d.Length < 20 || d[0] != 0 || d[1] != (byte)'P' || d[2] != (byte)'S' || d[3] != (byte)'F') return null;
-            int keys = BitConverter.ToInt32(d, 8), data = BitConverter.ToInt32(d, 12), count = BitConverter.ToInt32(d, 16);
-            var result = new Dictionary<string, string>();
-            for (int i = 0; i < count; ++i) {
-                int e = 20 + i * 16;
-                int keyOffset = BitConverter.ToUInt16(d, e), format = BitConverter.ToUInt16(d, e + 2);
-                int length = BitConverter.ToInt32(d, e + 4), dataOffset = BitConverter.ToInt32(d, e + 12);
-                int k = keys + keyOffset, end = k;
-                while (end < d.Length && d[end] != 0) ++end;
-                string key = Encoding.ASCII.GetString(d, k, end - k);
-                if (format == 0x0204 || format == 0x0004) {
-                    result[key] = Encoding.UTF8.GetString(d, data + dataOffset, length).TrimEnd('\0');
-                } else if (format == 0x0404) {
-                    result[key] = BitConverter.ToUInt32(d, data + dataOffset).ToString();
-                }
+    static Dictionary<string, string> ReadParamSfo(string path) { return ParamSfo.Read(path); }
+
+    // ---- installing from .pkg files ----------------------------------------------------------
+
+    void InstallPackages() {
+        string[] packages;
+        using (var dialog = new OpenFileDialog { Title = "The game's .pkg file and its updates", Multiselect = true,
+                                                 Filter = "PS4 packages (*.pkg)|*.pkg|All files (*.*)|*.*" }) {
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            packages = dialog.FileNames;
+        }
+        string games;
+        using (var dialog = new FolderBrowserDialog { ShowNewFolderButton = true,
+                Description = "Where to install the game (about 32 GB); a folder named after the game (CUSA...) is created in it" }) {
+            dialog.SelectedPath = Path.GetDirectoryName(packages[0]);
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            games = dialog.SelectedPath;
+        }
+        busy = true;
+        UpdateButtons();
+        tabs.SelectedTab = logPage;
+        progress.Maximum = 1000;
+        progress.Value = 0;
+        statusLabel.Text = "Installing the game from its packages...";
+        Log("");
+        Log("== Installing from packages");
+        var clock = Stopwatch.StartNew();
+        long shown = -1000;
+        PkgInstaller.Progress report = (done, total, file) => {
+            long now = clock.ElapsedMilliseconds;
+            if (now - Interlocked.Read(ref shown) < 250 && done < total) return;
+            Interlocked.Exchange(ref shown, now);
+            BeginInvoke((Action)delegate {
+                progress.Value = (int)Math.Min(1000, done * 1000 / Math.Max(1, total));
+                statusLabel.Text = string.Format("Installing from packages: {0:F1} of {1:F1} GB", done / 1e9, total / 1e9);
+            });
+        };
+        var thread = new Thread(() => {
+            string dest = null, error = null;
+            try {
+                dest = PkgInstaller.Install(packages, games, Log, report);
+            } catch (Exception e) {
+                error = e.Message;
             }
-            return result;
-        } catch (Exception) {
-            return null;
+            BeginInvoke((Action)delegate { PackagesFinished(dest, error); });
+        }) { IsBackground = true };
+        thread.Start();
+    }
+
+    void PackagesFinished(string dest, string error) {
+        busy = false;
+        UpdateButtons();
+        if (error == null) {
+            progress.Value = progress.Maximum;
+            Log("Installed to " + dest);
+            gameBox.Text = dest;
+            statusLabel.Text = "Game installed to " + dest + ". It is now the game folder.";
+        } else {
+            statusLabel.Text = "Installing from packages failed: " + error;
+            Log("FAILED: " + error);
+            MessageBox.Show(this, "Installing from the packages failed: " + error, Title, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
@@ -755,6 +797,7 @@ class SetupForm : Form {
 
     void UpdateButtons() {
         installButton.Enabled = !busy;
+        if (pkgButton != null) pkgButton.Enabled = !busy;
         saveButton.Enabled = !busy;
         playButton.Enabled = !busy;
     }

@@ -42,7 +42,9 @@ The intended automation must:
 ## What distinguishes this fork
 
 - **Windows usability:** a native Windows build, setup/launch tools, native-menu
-  integration and controller/input improvements.
+  integration and controller/input improvements. The aim is a streamlined
+  "executable + your .pkg files -> working game": the setup program installs the
+  game and its 1.09 update straight from their packages (no separate dump tool).
 - **Graphics and performance:** NVIDIA DLSS work alongside the inherited FSR/TAA
   paths, with correctness, frame pacing and laptop resource limits guiding changes.
   Feature availability depends on hardware and validation; this is not a claim
