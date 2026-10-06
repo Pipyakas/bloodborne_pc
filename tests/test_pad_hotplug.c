@@ -11,6 +11,7 @@
 } } while (0)
 
 int bbgpu_overlay_captures_input(void) { return 0; }
+int bbgpu_native_menu_press(void) { return 0; }
 int bbgpu_keyboard_controls(void) { return 0; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -247,6 +248,11 @@ std::array<BbNativeSetting, RowCount> table{};
 // One aligned int32 per row: the game's choice rows write all four bytes.
 std::array<int32_t, RowCount> values{}, applied{}, defaults{};
 bool open_once = false;
+// The Upscaling screen shows "Upscaling quality" or "Render resolution" by the upscaler when it
+// opens. An upscaler change that needs the other row reopens the screen: the pad presses
+// Circle (the screen closes and applies) and then Cross on the Graphics list's Upscaling row,
+// counted in pad reads (runtime_pad.c asks bbgpu_native_menu_press each read).
+std::atomic<int> reopen_reads{-1};
 // The game's "dropdown open" bytes of the open screen's choice rows (guest memory).
 std::array<const volatile uint8_t*, RowCount> dropdown_open{};
 // The open screen's rows (copies of table entries) and their places in rows[].
@@ -337,9 +343,15 @@ void Apply(bool choices) {
         if (now != applied[r] && settled) {
             std::printf("Settings: game menu: %s %d -> %d\n", Ascii(rows[r].label).c_str(),
                         applied[r], now);
+            const bool presets = HasPresets(v);
             applied[r] = now;
             rows[r].set(v, now);
             changed = true;
+            if (!choices && HasPresets(v) != presets) {
+                std::printf("Settings: game menu: reopening Upscaling for its %s row\n",
+                            HasPresets(v) ? "quality" : "render resolution");
+                reopen_reads = 0;
+            }
         }
     }
     if (changed) {
@@ -358,7 +370,21 @@ void ForgetDropdowns() {
     dropdown_open.fill(nullptr); // the screen and its widgets are gone
 }
 
+int MenuPress() {
+    const int read = reopen_reads.load();
+    if (read < 0) return 0;
+    // Circle for 3 reads, then the close (half a second at 60 reads/s), then Cross for 3.
+    reopen_reads = read >= 33 ? -1 : read + 1;
+    if (read < 3) return 1;
+    if (read >= 30 && read < 33) return 2;
+    return 0;
+}
+
 } // namespace BbNative
+
+extern "C" int bbgpu_native_menu_press(void) {
+    return BbNative::MenuPress();
+}
 
 extern "C" int bbgpu_native_settings(int32_t screen, const BbNativeSetting** rows) {
     return BbNative::Rows(screen, rows);

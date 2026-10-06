@@ -356,6 +356,7 @@ bool TemporalUpscaler::OnFrameStart() {
     last_active = active;
     last_jitter = jitter_on;
     BbSettings::Get().upscaler_ran = dispatched_last_frame;
+    BbSettings::Get().scene_frame = camera_motion.LastFrameHadCamera();
     dispatched_last_frame = false;
 
     // The display pass of an upscaled frame reads the upscaled UI image.

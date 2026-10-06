@@ -49,6 +49,9 @@ void bbgpu_set_setting(const char *key, const char *value);
 int bbgpu_capture_png(const char *path, int max_width, int timeout_ms, int *width, int *height);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
+/* A button the port's options screen presses on this pad read: 1 Circle, 2 Cross, 0 none
+ * (it reopens the Upscaling screen when an upscaler change needs its other row). */
+int bbgpu_native_menu_press(void);
 /* Launch shortcut for this start (bbport.ini "launch", BB_LAUNCH): BbSettings::Launch,
  * 0 title screen, 1 Play Offline menu, 2 continue, 3 load game, 4 new game, 5 system. */
 int bbgpu_launch_destination(void);
