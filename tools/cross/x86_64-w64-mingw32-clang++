@@ -2,4 +2,4 @@
 # Host clang++ targeting MSYS2 CLANG64 (Windows, UCRT, libc++); see tools/cross/build-windows.sh.
 exec clang++ --target=x86_64-w64-windows-gnu --sysroot=/opt/msys/clang64 -fuse-ld=lld -Wno-unused-command-line-argument \
     -rtlib=compiler-rt -unwindlib=libunwind -stdlib=libc++ -isystem /opt/msys/clang64/include/c++/v1 \
-    -isystem /opt/msys/clang64/include "$@"
+    -isystem /opt/msys/clang64/include -isystem /opt/cross/caseinc "$@"
