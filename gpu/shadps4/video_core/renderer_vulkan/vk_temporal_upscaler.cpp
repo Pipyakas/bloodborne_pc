@@ -455,12 +455,12 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
     } else if (gpu_bound && (frame_ms > target_ms * 1.05 || gpu_ms > target_ms * 0.95) &&
                since_change >= 1.0 && current > floor) {
         // GPU time grows with the pixel count (percent squared) plus fixed costs: aim at 85%
-        // of the target, in 5% steps, at most 10 per step (20 when far over) so the change in
-        // sharpness stays gradual.
+        // of the target, in steps of 1%, at most 10 per step (20 when far over) so the change
+        // in sharpness stays gradual.
         const double fit = current * std::sqrt(0.85 * target_ms / gpu_ms);
         const int largest_step = gpu_ms > target_ms * 1.5 ? 20 : 10;
-        next = std::clamp(int(fit) / 5 * 5, std::max(floor, current - largest_step),
-                          std::max(floor, (current - 1) / 5 * 5));
+        next = std::clamp(int(fit), std::max(floor, current - largest_step),
+                          std::max(floor, current - 1));
         if (next < current) {
             drs_lowered_from = current;
             drs_lowered_gpu_ms = gpu_ms;
@@ -472,11 +472,15 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
         }
     } else if (current < base_percent && since_change >= 2.0 &&
                gpu_ms < 0.8 * std::max(target_ms, frame_ms)) {
-        // Headroom against whatever limits the frame (the target, or the CPU): a step up.
-        const int up = std::min(base_percent, (current + 5) / 5 * 5);
-        if (up != drs_blocked || duration<double>(now - drs_blocked_at).count() >= 15.0) {
-            next = up;
+        // Headroom against whatever limits the frame (the target, or the CPU): up towards 85%
+        // of it, 1-5% per step; not to a size undone in the last 15 s.
+        const double budget = 0.85 * std::max(target_ms, frame_ms);
+        int up = std::clamp(int(current * std::sqrt(budget / gpu_ms)), current + 1,
+                            std::min(base_percent, current + 5));
+        if (drs_blocked && duration<double>(now - drs_blocked_at).count() < 15.0) {
+            up = std::min(up, drs_blocked - 1);
         }
+        if (up > current) next = up;
     }
     if (++drs_reports % 10 == 0 && next == current) {
         std::printf("Dynamic resolution: %d%% (GPU %.1f ms, frame %.1f ms, target %.1f ms)\n",
@@ -2239,7 +2243,7 @@ bool TemporalUpscaler::RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image 
     const bool ok = use_dlss ? dlss->Record(frame) : fsr4->Record(frame);
     if (use_dlss && !ok && dynamic_percent >= dlss_floor_percent) {
         // DLSS refused this small a render size: dynamic resolution stays above it.
-        dlss_floor_percent = dynamic_percent + 5;
+        dlss_floor_percent = dynamic_percent + 1;
         std::printf("Dynamic resolution: DLSS takes no %d%%; at least %d%% from now on\n",
                     dynamic_percent, dlss_floor_percent);
     }
