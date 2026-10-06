@@ -32,6 +32,18 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         }
     } else if (key == "preset") {
         v.preset = std::clamp(i, 0, PresetCount - 1);
+    } else if (key == "dlss_model") {
+        for (int m = 0; m < DlssModelCount; ++m) {
+            if (value == DlssModels[m].key) {
+                v.dlss_model = m;
+            }
+        }
+    } else if (key == "frame_gen") {
+        for (int m = 0; m < FrameGenCount; ++m) {
+            if (value == FrameGenName(m)) {
+                v.frame_gen = m;
+            }
+        }
     } else if (key == "sharpen") {
         v.sharpen = i != 0;
     } else if (key == "sharpness") {
@@ -115,6 +127,7 @@ void Load() {
         {"BB_REACTIVE", "reactive"},              {"BB_REACTIVE_SCALE", "reactive_scale"},
         {"BB_REACTIVE_THRESHOLD", "reactive_threshold"}, {"BB_REACTIVE_MAX", "reactive_max"},
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
+        {"BB_DLSS_MODEL", "dlss_model"},            {"BB_FRAME_GEN", "frame_gen"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
@@ -130,6 +143,7 @@ void Load() {
     v.startup_model_lod = v.model_lod;
     v.startup_output_res = v.output_res;
     v.startup_live_resolution = v.live_resolution;
+    v.startup_frame_gen = v.frame_gen;
 }
 
 void ConfigureUpscalerSupport(bool fsr4, bool fsr411, bool dlss) {
@@ -180,10 +194,12 @@ void Save() {
     }
     std::fprintf(file,
                  "# bbport settings (in-game menu: Insert / L3+R3)\n"
-                 "upscaler=%s\npreset=%d\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
+                 "upscaler=%s\npreset=%d\ndlss_model=%s\nframe_gen=%s\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
                  "reactive=%d\nobject_motion=%d\nreactive_scale=%.2f\nreactive_threshold=%.2f\nreactive_max=%.2f\n"
                  "debug_view=%d\nshow_fps=%d\nfsr4_auto_exposure=%d\nfsr4_invert_jitter=%d\n",
-                 UpscalerName(v.upscaler), v.preset.load(), int(v.sharpen.load()),
+                 UpscalerName(v.upscaler), v.preset.load(), DlssModels[v.dlss_model].key,
+                 FrameGenName(v.frame_gen),
+                 int(v.sharpen.load()),
                  v.sharpness.load(), int(v.jitter.load()), int(v.reactive.load()),
                  int(v.object_motion.load()),
                  v.reactive_scale.load(), v.reactive_threshold.load(), v.reactive_max.load(),
@@ -210,6 +226,28 @@ const char* PresetName(int preset) {
     static constexpr const char* names[PresetCount] = {"Native AA", "Quality", "Balanced",
                                                        "Performance", "Ultra Performance"};
     return names[std::clamp(preset, 0, PresetCount - 1)];
+}
+
+const char* FrameGenName(int mode) {
+    static constexpr const char* names[FrameGenCount] = {"off", "2x", "3x", "4x", "dynamic"};
+    return names[std::clamp(mode, 0, FrameGenCount - 1)];
+}
+
+const char* FrameGenLabel(int mode) {
+    static constexpr const char* labels[FrameGenCount] = {
+        "Off", "2x (1 generated frame)", "3x (2 generated frames)", "4x (3 generated frames)",
+        "Dynamic (to the display refresh rate)"};
+    return labels[std::clamp(mode, 0, FrameGenCount - 1)];
+}
+
+int DlssAutoPreset(int preset) {
+    return preset == Performance ? 13 : preset == UltraPerformance ? 12 : 11;
+}
+
+const char* DlssGeneration(int ngx_preset) {
+    return ngx_preset == 5 || ngx_preset == 6 ? "CNN (DLSS 3)"
+         : ngx_preset == 12 || ngx_preset == 13 ? "Transformer 2 (DLSS 4.5)"
+                                                : "Transformer (DLSS 4)";
 }
 
 const char* UpscalerName(int upscaler) {

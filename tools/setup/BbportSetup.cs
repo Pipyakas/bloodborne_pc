@@ -439,10 +439,10 @@ class SetupForm : Form {
         SelectValue(presentMode, env_or("BB_PRESENT_MODE", ""));
         fullscreen.Checked = ini_or("fullscreen", "1") == "1";
         showFps.Checked = ini_or("show_fps", "0") == "1";
-        SelectValue(upscaler, ini_or("upscaler", "fsr3"));
+        SelectValue(upscaler, ini_or("upscaler", "dlss"));
         if (upscaler.SelectedIndex < 0) SelectValue(upscaler, "fsr3");
-        SelectValue(preset, ini_or("preset", "0"));
-        SelectValue(live, ini_or("live_resolution", "0"));
+        SelectValue(preset, ini_or("preset", "3"));
+        SelectValue(live, ini_or("live_resolution", "auto"));
         SelectValue(modelLod, ini_or("model_lod", "0"));
         sharpen.Checked = ini_or("sharpen", "1") == "1";
         foreach (var effect in effects) {

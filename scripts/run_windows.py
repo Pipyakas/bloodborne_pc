@@ -100,7 +100,7 @@ def main():
             build()
         live = '0'
         if scaled_output:
-            live = os.environ.get('BB_LIVE_RES') or settings_value(config, 'live_resolution') or '0'
+            live = os.environ.get('BB_LIVE_RES') or settings_value(config, 'live_resolution') or 'auto'
             if live == 'auto':
                 caps = out / 'bb-gpu-capabilities.exe'
                 live = run([caps, '--live-resolution'], capture=True, check=False) or '0'

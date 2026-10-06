@@ -166,6 +166,10 @@ private:
     /// FSR 4 is selected, possible in this session (not BB_RENDER_RES) and has not failed.
     [[nodiscard]] bool UseFsr4() const;
     /// Records FSR 4 into output_image; on a permanent failure FSR 3 takes over.
+    /// bbport: frame generation inputs (vk_frame_gen.h) after the upscaler; `hudless`: ui_image
+    /// holds the upscaled scene before the UI (scaled outputs).
+    void RecordFrameGen(vk::CommandBuffer cmdbuf, vk::Image depth, vk::Format depth_format,
+                        u32 w, u32 h, u32 ow, u32 oh, bool was_reset, bool hudless);
     bool RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image color, Fsr4Upscaler::Image depth,
                     u32 w, u32 h, u32 ow, u32 oh, float frame_ms);
     void RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color, vk::ImageView depth);
