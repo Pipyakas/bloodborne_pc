@@ -1,5 +1,18 @@
 # Agent workflow
 
+## Decomp branch policy (owner decision, 2026-10-06)
+
+- This branch publishes curated experimental research separately from `master`.
+  See `research/decomp/README.md` for scope, provenance and limitations.
+- Do not publish game binaries/assets/saves, memory captures, Ghidra projects,
+  bulk game-code exports or proprietary SDKs. Keep those inputs private on d1.
+- Static decomp research belongs on d1; Windows is only for tests that require
+  its working game/GPU setup. Privately back up source and captures to d1.
+- Never use GPT-6.1 (any provider/alias/variant) for subagents or detached workers,
+  even when free workers stall. The user's main composer selection is unaffected.
+- Research publication on `decomp` does not authorize merging experimental
+  decomp replacements into playable `master` or rebuilding it for notes alone.
+
 ## Definition of done: update the playable master build
 
 The user tests the port through the **Bloodborne (bbport)** Start menu shortcut.
