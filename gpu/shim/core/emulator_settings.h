@@ -7,6 +7,7 @@
 #include "common/types.h"
 
 u32 BbDisplayRefreshHz(); // bbgpu.cpp: primary display refresh rate, 60 when unknown
+u32 BbFrameLimitSetting(); // bbgpu.cpp: bbport.ini frame_limit (FPS, 0: display refresh)
 
 enum GpuReadbacksMode : int { Disabled, Relaxed, Precise };
 
@@ -41,14 +42,16 @@ public:
         }();
         return value;
     }
-    /// Frames per second the present thread lets through; 0 = no limit. BB_FPS_LIMIT overrides.
+    /// Frames per second the present thread lets through; 0 = no limit. BB_FPS_LIMIT overrides;
+    /// otherwise, with the uncapped presets, the frame_limit setting (read again each frame:
+    /// the options screen changes it).
     u32 GetFrameLimit() {
-        static const u32 value = [] {
-            const long limit = Number("BB_FPS_LIMIT", -1);
-            if (limit >= 0) return u32(limit);
-            return Number("BB_VBLANK_HZ", 60) > 0 ? 0u : std::min<u32>(BbDisplayRefreshHz(), 120);
-        }();
-        return value;
+        static const long forced = Number("BB_FPS_LIMIT", -1);
+        static const bool vblank_paced = Number("BB_VBLANK_HZ", 60) > 0;
+        if (forced >= 0) return u32(forced);
+        if (vblank_paced) return 0;
+        const u32 chosen = BbFrameLimitSetting();
+        return chosen ? std::min<u32>(chosen, 120) : std::min<u32>(BbDisplayRefreshHz(), 120);
     }
     bool IsCopyGpuBuffers() { static const auto value = Flag("BB_COPY_GPU_BUFFERS", false); return value; }
     bool IsDirectMemoryAccessEnabled() { static const auto value = Flag("BB_DIRECT_MEMORY_ACCESS", false); return value; }

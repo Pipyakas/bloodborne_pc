@@ -228,6 +228,27 @@ void Menu() {
         Hint("For ghosting checks: the FSR 4 network normalizes color by exposure and uses it "
              "to decide when to drop past frames. Applied immediately, no restart.");
     }
+    if (s.upscaler == BbSettings::UpscalerDlss) {
+        int model = s.dlss_model;
+        if (ImGui::BeginCombo("DLSS model", BbSettings::DlssModels[model].label)) {
+            for (int i = 0; i < BbSettings::DlssModelCount; ++i) {
+                if (ImGui::Selectable(BbSettings::DlssModels[i].label, i == model)) {
+                    Store(s.dlss_model, i, true);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (const int active = s.dlss_active_preset; active > 0) {
+            ImGui::Text("In use: preset %c, %s", char('A' + active - 1),
+                        BbSettings::DlssGeneration(active));
+        }
+        Hint("DLSS 3 CNN (E) is the lightest; DLSS 4 Transformer (K, J) is sharper and more "
+             "stable at about twice the cost; DLSS 4.5 Transformer 2 (M for Performance, L for "
+             "Ultra Performance) is the newest and heaviest, strongest at low render resolutions. "
+             "On RTX 20/30 the transformer models cost noticeably more GPU time. "
+             "Auto uses the driver's choice for the preset (K, M for Performance, L for Ultra "
+             "Performance). Changing it rebuilds DLSS (a short pause).");
+    }
     const bool upscaler_on = s.upscaler != BbSettings::UpscalerOff;
     const bool taa = s.upscaler == BbSettings::UpscalerTaa;
     ImGui::BeginDisabled(!upscaler_on);
@@ -314,6 +335,38 @@ void Menu() {
          "A moving object with neither blue nor red/green is treated as still by the "
          "upscaler, hence the trail.");
     ImGui::EndDisabled(); // upscaler off
+
+#ifdef _WIN32
+    ImGui::SeparatorText("Frame generation (DLSS-G)");
+    int frame_gen = s.frame_gen;
+    if (ImGui::BeginCombo("Frame generation", BbSettings::FrameGenLabel(frame_gen))) {
+        for (int i = 0; i < BbSettings::FrameGenCount; ++i) {
+            if (ImGui::Selectable(BbSettings::FrameGenLabel(i), i == frame_gen)) {
+                Store(s.frame_gen, i, true);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (s.frame_gen_ready) {
+        ImGui::Text("%s", s.frame_gen_active ? "Generating frames"
+                          : s.frame_gen == BbSettings::FrameGenOff ? "Off (presenting through DXGI)"
+                                                                   : "Waiting for a scene");
+    } else if ((s.frame_gen != BbSettings::FrameGenOff) != (s.startup_frame_gen != BbSettings::FrameGenOff)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Applies after restarting the game");
+    }
+    if (const char* problem = s.frame_gen_problem.load()) {
+        ImGui::PushTextWrapPos();
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "Frame generation: %s", problem);
+        ImGui::PopTextWrapPos();
+    }
+    Hint("NVIDIA DLSS Frame Generation through Streamline: the game renders one frame and DLSS-G "
+         "adds 1-3 generated ones (Dynamic picks the count to reach the display refresh rate). "
+         "Rendered frames are capped at refresh / multiplier. Generation pauses while the window "
+         "is not focused (DLSS-G's own rule). Needs an upscaler (DLSS, FSR or TAA); outputs other "
+         "than 1080p also give it the scene without the HUD (cleaner UI). Files: out/streamline "
+         "(tools/fetch_streamline.sh) and on RTX 20/30 the dlssg_sm86 mod in out/dlssg_sm86. "
+         "Switching it on or off needs a restart; the multiplier changes live.");
+#endif
 
     ImGui::SeparatorText("Output resolution");
     static const char* outputs[] = {"1280 x 720", "1920 x 1080", "2560 x 1440", "3840 x 2160"};
@@ -444,8 +497,16 @@ void FpsCounter() {
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing);
     const auto& s = BbSettings::Get();
-    ImGui::Text("%.0f FPS  %.1f ms  %s", frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f,
-                frame_ms_avg,
+    const float fps = frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f;
+    if (s.frame_gen_active) {
+        // Rendered frames, and what DLSS-G shows with its generated ones.
+        const int shown = s.frame_gen_presented;
+        ImGui::Text("%.0f FPS  FG %dx (rendered %.0f FPS, %.1f ms)", fps * shown, shown, fps,
+                    frame_ms_avg);
+        ImGui::End();
+        return;
+    }
+    ImGui::Text("%.0f FPS  %.1f ms  %s", fps, frame_ms_avg,
                 s.upscaler == BbSettings::UpscalerFsr3   ? "FSR 3.1"
                 : s.upscaler == BbSettings::UpscalerFsr4 ? "FSR 4"
                 : s.upscaler == BbSettings::UpscalerFsr411 ? "FSR 4.1.1"

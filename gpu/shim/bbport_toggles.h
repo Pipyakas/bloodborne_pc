@@ -77,6 +77,10 @@ enum : std::uint64_t {
     // when nothing moves. Static-camera flicker of railings/window bars p99.9 -45% (2026-10-03).
     TaaKeepNearerHistory = 1ull << 55,
     SceneMipBias = 1ull << 57, ///< negative LOD bias of G-buffer samplers at reduced scene sizes
+    /// Render-target memcpys (compute dword copies of a GPU-written image) as image copies also
+    /// when the source buffer runs past the image (depth plus stencil/HTILE planes) or no
+    /// destination image exists yet (2026-10-06).
+    RenderTargetMemcpy = 1ull << 58,
     // Bits 20-29 are used as raw debug toggles by the camera/object motion and the upscaler.
 };
 inline bool Disabled(std::uint64_t bit) {

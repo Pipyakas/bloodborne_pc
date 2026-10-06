@@ -16,9 +16,9 @@
  * Play Offline, then Continue / Load Game / New Game / System.
  *
  * Options screen (title System and in-game Options; builder 0x1bb3ad0): a "Graphics" row
- * after Brightness opens a sub-screen the way Environment does (the same sprite, the
- * game's on/off, choice and slider rows) whose rows edit the port's settings
- * (bbgpu_native_settings). Its texts are the game's text objects pointing at our own
+ * after Brightness opens a list of its own (Screen, Advanced options, Upscaling), each row
+ * a sub-screen opened the way Environment is (the same sprite, the game's on/off, choice
+ * and slider rows) whose rows edit the port's settings (bbgpu_native_settings). Its texts are the game's text objects pointing at our own
  * strings, so no game file changes.
  *
  * A row is two text objects (label and one-line help, 0x40 bytes each, built from the
@@ -59,6 +59,21 @@ static const uint64_t main_menu_rows[] = {0x1b4a502, 0x1b4a604, 0x1b4a669, 0x1b4
 #define ADD_TOGGLE 0x1b2a100            /* (screen, texts, u8 *value, list2, u8 *default) */
 #define ADD_CHOICE 0x1b29370            /* (screen, texts, u8 *value, list32, u8 *default) */
 #define ADD_SLIDER 0x1b2ac00            /* (screen, texts, u8 *value 0..10, u8 *default) */
+/* The options builder's list (0x1bb3ad0): a command list it fills with rows, then turns into
+ * the step that shows it. */
+#define LIST_INIT 0x1be8a30             /* (list, int32 *type) */
+#define LIST_TO_STEP 0x1bea630          /* (step out, list, callback) */
+#define LIST_DESTROY 0x1b4cbb0          /* (list) */
+#define LIST_STEP_TABLE 0x5343790       /* the callback it passes (no capture) */
+#define LIST_SIZE 0x1190
+#define LIST_MOVIE 0x8                  /* UTF-16 sprite name */
+#define LIST_OWNER 0x1180               /* the row argument; a byte after it */
+#define OPTION_MOVIE_NAME 0x49b474a     /* u"OptionSetting" */
+#define OPTION_LIST_INIT 0x1bb3b13      /* the builder's calls and leas of the above */
+#define OPTION_LIST_TO_STEP 0x1bb4978
+#define OPTION_LIST_DESTROY 0x1bb4a03
+#define OPTION_LIST_STEP_LEA 0x1bb494b
+#define OPTION_MOVIE_LEA 0x1bb3b59
 #define MSG_MENU 200                    /* SP_メニューテキスト */
 /* Movie texts: a walker passes each named text field to a localiser (StaticText_<id> gets
  * message <id>), which sets it through the movie: (*movie)[0x138](movie, path, text, 1). */
@@ -70,6 +85,7 @@ static const uint64_t main_menu_rows[] = {0x1b4a502, 0x1b4a604, 0x1b4a669, 0x1b4
 #define TEXT_ENV_HEADING 111020
 #define TEXT_ENV_DISPLAY 111010
 #define TEXT_ENV_SOUND 111011
+#define TEXT_OPTIONS_HEADING 110020   /* the options list's heading (System / Options) */
 /* Row callbacks (their vtables). */
 #define ROW_OFFLINE 0x533be30
 #define ROW_CONTINUE 0x533bcf0
@@ -203,13 +219,23 @@ static int menu_log = -1;
  * it is created, so entries are replaced; only a movie found in a live screen is used). */
 static struct { void *movie, *object; int32_t id; } env_texts[48];
 static unsigned env_text_next;
+/* The Graphics list was opened: the next options movie loaded is its own (one per list). */
+static int graphics_list_pending;
 
 static ABI void localize_field(const char *name, void *field) {
     ((LocalizeField)(guest + LOCALIZE_FIELD))(name, field);
     if (!name || strncmp(name, "StaticText_", 11)) return;
     const int32_t id = (int32_t)strtol(name + 11, NULL, 10);
-    if (id != TEXT_ENV_HEADING && id != TEXT_ENV_DISPLAY && id != TEXT_ENV_SOUND) return;
     void *movie = *(void **)((char *)field + 0x18), *object = *(void **)((char *)field + 0x28);
+    if (menu_log < 0) menu_log = getenv("BB_MENU_LOG") != NULL;
+    if (menu_log) printf("Runtime: menu text %d of movie %p\n", id, movie);
+    if (id == TEXT_OPTIONS_HEADING && graphics_list_pending) {
+        graphics_list_pending = 0;
+        ((SetMovieText)((*(void ***)movie)[0x138 / 8]))(movie, object,
+                                                        bbgpu_native_screen_text(BB_NATIVE_GRAPHICS, 0), 1);
+        return;
+    }
+    if (id != TEXT_ENV_HEADING && id != TEXT_ENV_DISPLAY && id != TEXT_ENV_SOUND) return;
     unsigned slot = env_text_next;
     for (unsigned i = 0; i < sizeof(env_texts) / sizeof(*env_texts); ++i)
         if (env_texts[i].movie == movie && env_texts[i].id == id) slot = i;
@@ -217,8 +243,6 @@ static ABI void localize_field(const char *name, void *field) {
     env_texts[slot].movie = movie;
     env_texts[slot].object = object;
     env_texts[slot].id = id;
-    if (menu_log < 0) menu_log = getenv("BB_MENU_LOG") != NULL;
-    if (menu_log) printf("Runtime: menu text %d of movie %p\n", id, movie);
 }
 
 /* The movie a screen draws in: a recorded movie pointer within the screen object (or one
@@ -363,13 +387,17 @@ static void build_screen(int32_t id, void *screen) {
 }
 
 /* Content builders (called as member functions: 16-byte aligned, so they read as non-virtual). */
-__attribute__((aligned(16))) static ABI void graphics_content(void *screen, void *settings) {
+__attribute__((aligned(16))) static ABI void screen_content(void *screen, void *settings) {
     (void)settings;
-    build_screen(BB_NATIVE_GRAPHICS, screen);
+    build_screen(BB_NATIVE_SCREEN, screen);
 }
-__attribute__((aligned(16))) static ABI void effects_content(void *screen, void *settings) {
+__attribute__((aligned(16))) static ABI void advanced_content(void *screen, void *settings) {
     (void)settings;
-    build_screen(BB_NATIVE_EFFECTS, screen);
+    build_screen(BB_NATIVE_ADVANCED, screen);
+}
+__attribute__((aligned(16))) static ABI void upscaling_content(void *screen, void *settings) {
+    (void)settings;
+    build_screen(BB_NATIVE_UPSCALING, screen);
 }
 
 /* A screen's choices apply when it closes (its dropdowns write while hovering): the screen
@@ -407,11 +435,14 @@ static void watch_screen(void *screen) {
 typedef void *(ABI *NewScreen)(void *, void *, const char *, void *, uint64_t, int32_t);
 /* The screens: Environment's sprite (five rows; its rows' stacking reversed in our copy of
  * the movie, so a dropdown is drawn over the rows below it), our rows. */
-static ABI void *graphics_screen(void *a, void *b) {
-    return ((NewScreen)(guest + NEW_SCREEN))(a, b, "EnvironmentSetting", (void *)graphics_content, 0, 0);
+static ABI void *screen_screen(void *a, void *b) {
+    return ((NewScreen)(guest + NEW_SCREEN))(a, b, "EnvironmentSetting", (void *)screen_content, 0, 0);
 }
-static ABI void *effects_screen(void *a, void *b) {
-    return ((NewScreen)(guest + NEW_SCREEN))(a, b, "EnvironmentSetting", (void *)effects_content, 0, 0);
+static ABI void *advanced_screen(void *a, void *b) {
+    return ((NewScreen)(guest + NEW_SCREEN))(a, b, "EnvironmentSetting", (void *)advanced_content, 0, 0);
+}
+static ABI void *upscaling_screen(void *a, void *b) {
+    return ((NewScreen)(guest + NEW_SCREEN))(a, b, "EnvironmentSetting", (void *)upscaling_content, 0, 0);
 }
 
 typedef void *(ABI *OpenScreen)(void **, void *, void *);
@@ -423,8 +454,9 @@ static void **open_screen(void **step, void *arg, void *factory_function) {
     ((OpenScreen)(guest + OPEN_SCREEN))(step, arg, &factory);
     return step;
 }
-static ABI void **graphics_row(void **step, void *arg) { return open_screen(step, arg, (void *)graphics_screen); }
-static ABI void **effects_row(void **step, void *arg) { return open_screen(step, arg, (void *)effects_screen); }
+static ABI void **screen_row(void **step, void *arg) { return open_screen(step, arg, (void *)screen_screen); }
+static ABI void **advanced_row(void **step, void *arg) { return open_screen(step, arg, (void *)advanced_screen); }
+static ABI void **upscaling_row(void **step, void *arg) { return open_screen(step, arg, (void *)upscaling_screen); }
 
 typedef void *(ABI *OptionAddRow)(void *list, void *texts, void *callback, uint64_t *flags);
 static void *options_list;
@@ -446,11 +478,37 @@ static void add_option_row(void *list, int32_t screen, void *row_function) {
     text_release(&texts[0]);
 }
 
-/* Before the Network row (after Brightness and its own check): Graphics and Effects. */
+/* The Graphics row opens a list of its own, built the way the options builder builds its
+ * list: a command list (type 3) shown with the options movie, our rows, then the step that
+ * shows it. The list keeps the row's argument (the caller of the options list). */
+typedef void (ABI *ListInit)(void *list, const int32_t *type);
+typedef void *(ABI *ListToStep)(void **step, void *list, void *callback);
+typedef void (ABI *ListDestroy)(void *list);
+
+static ABI void **graphics_row(void **step, void *arg) {
+    _Alignas(16) static unsigned char list[LIST_SIZE]; /* the menu thread only */
+    const int32_t type = 3;
+    memset(list, 0, sizeof(list));
+    ((ListInit)(guest + LIST_INIT))(list, &type);
+    *(const void **)(list + LIST_MOVIE) = guest + OPTION_MOVIE_NAME;
+    *(void **)(list + LIST_OWNER) = arg;
+    list[LIST_OWNER + 8] = 0;
+    add_option_row(list, BB_NATIVE_SCREEN, (void *)screen_row);
+    add_option_row(list, BB_NATIVE_ADVANCED, (void *)advanced_row);
+    add_option_row(list, BB_NATIVE_UPSCALING, (void *)upscaling_row);
+    Callback shown = {.table = (const void *const *)(guest + LIST_STEP_TABLE)};
+    shown.active = &shown;
+    *step = NULL;
+    ((ListToStep)(guest + LIST_TO_STEP))(step, list, &shown);
+    graphics_list_pending = *step != NULL; /* its heading: Graphics */
+    ((ListDestroy)(guest + LIST_DESTROY))(list);
+    return step;
+}
+
+/* Before the Network row (after Brightness and its own check): Graphics. */
 static ABI void *options_network_label(void *text, int32_t category, int32_t id) {
     if (options_list) {
         add_option_row(options_list, BB_NATIVE_GRAPHICS, (void *)graphics_row);
-        add_option_row(options_list, BB_NATIVE_EFFECTS, (void *)effects_row);
         options_list = NULL;
     }
     return ((MakeText)(guest + MAKE_TEXT))(text, category, id);
@@ -708,8 +766,12 @@ unsigned runtime_menu_install(unsigned char *image, uint64_t image_size, unsigne
             !memcmp(image + OPTION_NETWORK_LABEL - 8, network_id, sizeof(network_id)) &&
             *(void **)(image + OPTION_ROW_TABLE + 16) == (void *)(image + OPTION_ROW_INVOKE) &&
             *(void **)(image + SCREEN_FACTORY_TABLE + 16) == (void *)(image + SCREEN_FACTORY_INVOKE) &&
-            !((uintptr_t)graphics_content & 1) && !((uintptr_t)effects_content & 1) && lea_targets(LOCALIZE_FIELD_LEA, LOCALIZE_FIELD) &&
-            lea_targets(ENV_CONTENT_LEA, ENV_CONTENT);
+            !((uintptr_t)screen_content & 1) && !((uintptr_t)advanced_content & 1) &&
+            !((uintptr_t)upscaling_content & 1) && lea_targets(LOCALIZE_FIELD_LEA, LOCALIZE_FIELD) &&
+            lea_targets(ENV_CONTENT_LEA, ENV_CONTENT) &&
+            call_targets(OPTION_LIST_INIT, LIST_INIT) && call_targets(OPTION_LIST_TO_STEP, LIST_TO_STEP) &&
+            call_targets(OPTION_LIST_DESTROY, LIST_DESTROY) &&
+            lea_targets(OPTION_LIST_STEP_LEA, LIST_STEP_TABLE) && lea_targets(OPTION_MOVIE_LEA, OPTION_MOVIE_NAME);
     if (!known) {
         puts("Runtime: menus not recognised (not v1.09?): no Quit Game, Graphics or launch shortcut");
         return 0;
@@ -726,7 +788,7 @@ unsigned runtime_menu_install(unsigned char *image, uint64_t image_size, unsigne
                         redirect_lea(ENV_CONTENT_LEA, (const void *)env_content));
     hooks += (unsigned)(redirect_call(OPTION_BRIGHTNESS_ADD, (const void *)options_after_brightness) +
                         redirect_call(OPTION_NETWORK_LABEL, (const void *)options_network_label));
-    printf("Runtime: title menus: Quit Game rows; options: Graphics, Effects; launch shortcut \"%s\"\n",
+    printf("Runtime: title menus: Quit Game rows; options: Graphics; launch shortcut \"%s\"\n",
            launch == LAUNCH_TITLE ? "title" : launch == LAUNCH_OFFLINE ? "offline" :
            launch == LAUNCH_CONTINUE ? "continue" : launch == LAUNCH_LOAD ? "load" :
            launch == LAUNCH_NEW_GAME ? "new_game" : "system");

@@ -368,6 +368,12 @@ bool Instance::CreateDevice() {
     const bool nvx_binary_import = add_extension(VK_NVX_BINARY_IMPORT_EXTENSION_NAME);
     dlss_extensions =
         add_extension(VK_NVX_IMAGE_VIEW_HANDLE_EXTENSION_NAME) && nvx_binary_import;
+#ifdef _WIN32
+    // bbport: frame generation presents through D3D12 (vk_frame_gen.h): images and a fence
+    // shared with D3D12 by NT handles.
+    const bool external_memory_win32 = add_extension("VK_KHR_external_memory_win32");
+    external_win32 = add_extension("VK_KHR_external_semaphore_win32") && external_memory_win32;
+#endif
     shader_clock = add_extension(VK_KHR_SHADER_CLOCK_EXTENSION_NAME);
     if (shader_clock) {
         shader_clock_features = feature_chain.get<vk::PhysicalDeviceShaderClockFeaturesKHR>();

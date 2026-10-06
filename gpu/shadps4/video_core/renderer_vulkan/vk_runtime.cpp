@@ -204,6 +204,11 @@ bool Runtime::Transit(VideoCore::Image* image, vk::ImageLayout dst_layout,
 
 Runtime::TransferMark::TransferMark(Runtime& runtime, const char* what,
                                     const VideoCore::Image& image) {
+    if (runtime.scene_targets && runtime.scene_targets->debug) {
+        std::printf("Scene transfer: %s %s %ux%u at %#llx\n", what,
+                    vk::to_string(image.info.pixel_format).c_str(), image.info.size.width,
+                    image.info.size.height, (unsigned long long)image.info.guest_address);
+    }
     profiler = GpuProfiler::Get();
     if (!profiler || !profiler->Records(&runtime.scheduler)) {
         profiler = nullptr;
