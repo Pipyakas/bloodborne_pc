@@ -27,7 +27,7 @@ git -C "$src" checkout -q --detach --force "$commit"
 git -C "$src" submodule update -q --init --recursive
 log=$repo/.cross/build.log
 echo "Building $commit for Windows (log: $log)"
-if ! podman run --rm -v "$src:/src:Z" -v "$repo/.git:$repo/.git:z" -w /src "$image" bash tools/cross/in-container.sh > "$log" 2>&1; then
+if ! podman run --rm -v "$src:$src:Z" -v "$repo/.git:$repo/.git:z" -w "$src" "$image" bash tools/cross/in-container.sh > "$log" 2>&1; then
     tail -40 "$log" >&2; echo "Windows build failed for $commit; dist/windows unchanged." >&2; exit 1
 fi
 
