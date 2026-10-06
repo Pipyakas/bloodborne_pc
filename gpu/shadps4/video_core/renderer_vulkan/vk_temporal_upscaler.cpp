@@ -322,18 +322,25 @@ bool TemporalUpscaler::OnFrameStart() {
     bool resized = false;
     if (!scaled_session) {
         // Upscalers render at their preset's size; upscaler off and TAA at render_scale
-        // percent of the output (above 100 supersamples). Dynamic resolution goes below either.
+        // percent of the output (above 100 supersamples). Dynamic resolution replaces both:
+        // from 100% of the output (render_scale above 100: that) down to whatever the GPU
+        // needs, until the CPU limits the frame rate.
         const SceneResolution::Size output{target_width, target_height};
         const bool presets = active && upscaler != BbSettings::UpscalerTaa;
         const int scale = settings.render_scale.load();
-        const auto max_render = presets ? SceneResolution::ForPreset(preset, output)
-                                        : SceneResolution::ForScale(scale, output);
+        const bool dynamic_on = settings.dynamic_resolution;
+        const int base_percent = dynamic_on ? (presets ? 100 : std::max(100, scale))
+                                 : presets  ? int(100.0f / BbSettings::PresetScale(preset))
+                                            : scale;
+        const auto max_render = dynamic_on || !presets
+                                    ? SceneResolution::ForScale(base_percent, output)
+                                    : SceneResolution::ForPreset(preset, output);
         max_render_width = max_render.width;
         max_render_height = max_render.height;
-        const int base_percent = presets ? int(100.0f / BbSettings::PresetScale(preset)) : scale;
-        // DLSS takes at most a 3x upscale (Ultra Performance).
+        if (changed) drs_useful_floor = 0; // another configuration: probe again
         const int dynamic = UpdateDynamicResolution(
-            base_percent, upscaler == BbSettings::UpscalerDlss ? 35 : BbSettings::DynamicPercentMin);
+            base_percent, upscaler == BbSettings::UpscalerDlss ? dlss_floor_percent
+                                                               : BbSettings::RenderScaleMin);
         resized = scene_targets.SetSize(dynamic ? SceneResolution::ForScale(dynamic, output)
                                                 : max_render);
         render_width = scene_targets.Size().width;
@@ -402,22 +409,55 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
         settings.dynamic_percent = 0;
         return 0;
     }
+    if (drs_settle) {
+        // The window after a change holds its resize pause: not a measurement.
+        drs_settle = false;
+        return dynamic_percent;
+    }
     const u32 limit = EmulatorSettings.GetFrameLimit();
     const double target_ms = 1000.0 / double(limit ? limit : EmulatorSettings.GetVblankFrequency());
-    const int floor = std::min(floor_percent, base_percent);
     const int current = dynamic_percent ? dynamic_percent : base_percent;
     const double since_change = duration<double>(now - drs_changed).count();
+    // Where lowering stopped paying off (below), not lowered further for 30 s.
+    if (drs_useful_floor && duration<double>(now - drs_useful_floor_at).count() >= 30.0) {
+        drs_useful_floor = 0;
+    }
+    const int floor = std::min(std::max(floor_percent, drs_useful_floor), base_percent);
     int next = current;
+    if (drs_lowered_from) {
+        // The first measurement after a step down: if the GPU saved under a tenth of what the
+        // pixel count predicts, its remaining work is not resolution-bound (the upscaler and
+        // HUD at output size, shadows) and the step only cost image quality. Go back up and
+        // stop there (4K DLSS at a 120 FPS limit: 10% -> 5% saved 0.1 of 12.7 ms).
+        const double predicted = drs_lowered_gpu_ms *
+            (1.0 - double(current * current) / double(drs_lowered_from * drs_lowered_from));
+        const double saved = drs_lowered_gpu_ms - gpu_ms;
+        const int from = drs_lowered_from;
+        drs_lowered_from = 0;
+        if (predicted > 1.0 && saved < 0.1 * predicted) {
+            std::printf("Dynamic resolution: %d%% -> %d%% saved %.1f of %.1f ms; back to %d%%\n",
+                        from, current, saved, drs_lowered_gpu_ms, from);
+            drs_useful_floor = from;
+            drs_useful_floor_at = now;
+            next = from;
+        }
+    }
     // GPU-bound: busy for most of the frame, and either missing the target or within 5% of
     // it (no headroom for heavier scenes). When the CPU limits the frame rate, the GPU is idle
     // part of each frame and nothing is lowered.
     const bool gpu_bound = gpu_ms > frame_ms * 0.9;
-    if (gpu_bound && (frame_ms > target_ms * 1.05 || gpu_ms > target_ms * 0.95) &&
-        since_change >= 1.0 && current > floor) {
+    if (next != current) {
+        // reverting a step that did not pay off
+    } else if (gpu_bound && (frame_ms > target_ms * 1.05 || gpu_ms > target_ms * 0.95) &&
+               since_change >= 1.0 && current > floor) {
         // GPU time grows with the pixel count (percent squared) plus fixed costs: aim at 85%
         // of the target in one step, in 5% steps.
         const double fit = current * std::sqrt(0.85 * target_ms / gpu_ms);
         next = std::clamp(int(fit) / 5 * 5, floor, std::max(floor, (current - 1) / 5 * 5));
+        if (next < current) {
+            drs_lowered_from = current;
+            drs_lowered_gpu_ms = gpu_ms;
+        }
         // A step up undone within 3 s is not retried for 15 s (no oscillation).
         if (drs_raised && since_change < 3.0) {
             drs_blocked = current;
@@ -437,6 +477,7 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
     }
     if (next != current) {
         drs_raised = next > current;
+        drs_settle = true;
         std::printf("Dynamic resolution: %d%% -> %d%% (GPU %.1f ms, frame %.1f ms, target "
                     "%.1f ms)\n",
                     current, next, gpu_ms, frame_ms, target_ms);
@@ -2160,6 +2201,12 @@ bool TemporalUpscaler::RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image 
         .auto_exposure = settings.fsr4_auto_exposure,
     };
     const bool ok = use_dlss ? dlss->Record(frame) : fsr4->Record(frame);
+    if (use_dlss && !ok && dynamic_percent >= dlss_floor_percent) {
+        // DLSS refused this small a render size: dynamic resolution stays above it.
+        dlss_floor_percent = dynamic_percent + 5;
+        std::printf("Dynamic resolution: DLSS takes no %d%%; at least %d%% from now on\n",
+                    dynamic_percent, dlss_floor_percent);
+    }
     // The menu shows the reason; it outlives this frame (FSR 4 keeps its last message).
     static std::string shown;
     const char* problem = use_dlss ? dlss->Problem() : fsr4->Problem();

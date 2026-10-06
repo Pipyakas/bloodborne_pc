@@ -394,10 +394,11 @@ void Menu() {
              "stay at the output resolution.");
     }
     Checkbox("Dynamic resolution", s.dynamic_resolution);
-    Hint("While the GPU cannot reach the frame rate limit, the scene's render resolution drops "
-         "in 5% steps (to 25% of the output, 35% with DLSS); it rises again while the GPU has "
-         "headroom, up to the preset's or the render resolution's size. When the CPU limits the "
-         "frame rate, the resolution is not lowered. Each change is a short pause.");
+    Hint("Replaces the preset (or a render resolution below 100%): while the GPU cannot reach "
+         "the frame rate limit, the scene's render resolution drops in 5% steps; it rises again "
+         "while the GPU has headroom, up to 100% of the output (a render resolution above 100% "
+         "keeps its supersampling). It stops lowering when the CPU limits the frame rate, or "
+         "when a step no longer saves GPU time. Each change is a short pause.");
     if (s.dynamic_resolution) {
         ImGui::Text("Dynamic resolution: %d%%, GPU %.1f ms per frame", s.dynamic_percent.load(),
                     s.gpu_frame_ms.load());
