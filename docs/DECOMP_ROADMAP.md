@@ -9,10 +9,10 @@ original game code. This page is the plan; nothing below exists yet unless marke
 | Fact | Value | Consequence |
 |---|---|---|
 | Executable segment | 84.8 MB (code + read-only data) | Large: comparable to a full modern AAA executable |
-| Functions | ~209,000 (`.eh_frame_hdr`: 1,671,628 bytes of 8-byte FDE entries) | Function boundaries are known for free; many are tiny (thunks, templates, inlined STL leftovers) |
+| Functions | 162,959 (`.eh_frame_hdr` FDE table; fde_count at offset 8) | Function boundaries are known for free; many are tiny (thunks, templates, inlined STL leftovers) |
 | Compiler | Sony's Orbis clang from SDK 4.50 (`SYSTEM_VER` 0x04500000), not available to us | A *matching* (byte-identical) decomp is not realistic; target **functional equivalence** |
 | C++ RTTI | 209 type names, nearly all FMOD's | The game's own classes have no RTTI: layouts come from vtables, constructors and usage |
-| Middleware | Havok (physics `hkp*`, behavior `hkb*`), Scaleform GFx, FMOD Designer, Lua, zlib, libpng | A large share of the 209k functions is licensed middleware, not FromSoftware code |
+| Middleware | Havok (physics `hkp*`, behavior `hkb*`), Scaleform GFx, FMOD Designer, Lua, zlib, libpng | A large share of the 163k functions is licensed middleware, not FromSoftware code |
 | Game code | Dantelion engine (DL*), FRPG game layer, EzState scripts | The part worth decompiling first |
 | System calls | 686 imports from 42 PS4 modules | Already provided by bbport's runtime and the shadPS4-derived renderer |
 
@@ -170,7 +170,7 @@ first functions.
 - After it, if ~10 agent workers each land ~50-100 verified small functions a day, the leaves
   move fast, but larger functions (hundreds of instructions, many callees, shared state) take far
   longer each, and gameplay regression is limited to one GPU.
-- Game code alone (excluding middleware) is likely ~100k+ functions: **many months**, not weeks,
+- Game code alone (excluding middleware) is likely well over 50k functions: **many months**, not weeks,
   even with agents. First visible milestones: a subsystem (e.g. resource loading) fully replaced
   and verified within ~1-2 months of starting phase 2.
 
