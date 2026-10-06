@@ -210,8 +210,9 @@ with `BB_PRESENT_DUMP_COUNT=N` (dump N consecutive presented frames), `BB_HIDDEN
 is never shown and the host keyboard and gamepads are ignored), `BB_MINIMIZED=1` (create a minimized
 taskbar window without taking focus, ignoring fullscreen settings and host input; silent unless
 `BB_AUDIO` is set; `BB_HIDDEN=1` takes precedence), `BB_CONTROL=port` (a line protocol
-on 127.0.0.1 for pad input, frame waits and PNG screenshots; 0 picks a free port; commands in
-`src/runtime_control.c`).
+on 127.0.0.1 for pad input, frame waits, PNG screenshots and text entry; 0 picks a free port;
+commands in `src/runtime_control.c`), `BB_IME_TEXT=...` (answer the next system text dialog
+immediately with this name instead of asking).
 
 **Agents (MCP):** `tools/mcp/bbport_mcp.py` (registered in `.mcp.json`, Python standard library
 only) starts the game in the background with `BB_MINIMIZED=1`, `BB_AUDIO=none`, no console and a
@@ -220,7 +221,8 @@ only) starts the game in the background with `BB_MINIMIZED=1`, `BB_AUDIO=none`, 
 `game_stop`. Screenshots are read back from the presenter, so the desktop and its focus stay
 untouched; the log is `out/mcp/game.log`. The same tools run from a shell, one call each, the
 game running in between: `python tools/mcp/bbport_mcp.py launch`, `... press tokens=cross`,
-`... screenshot` (prints the PNG's path), `... stop`, `... help`.
+`... screenshot` (prints the PNG's path), `... commands='["wait 120","ime Hunter"]'`, `... stop`,
+`... help`.
 Launches default to a minimized taskbar window, so running instances stay visible in the taskbar.
 You can restore it manually; agent input still uses the control channel and host input stays disabled.
 Use `game_launch(hidden=true)` or `python tools/mcp/bbport_mcp.py launch hidden=true` to hide it
@@ -300,6 +302,26 @@ up to 4 frames per rendered frame. `BB_SL_LOG=1` prints Streamline's log.
 the GPU clock per profile (`nvidia-smi -lgc`): on battery, G-Helper's *Silent* profile capped an
 RTX 3070 Laptop at 800 MHz (35 FPS where AC gave 50-60). Use the charger and a performance
 profile; at 1440p the GPU (not the CPU) is the limit on that machine.
+
+**What this fork adds on Windows** (over upstream's port):
+
+- *System text dialog on screen.* Every PS4 system text box (the name you enter when a new game
+  starts, for instance) is now a centered input box over a dimmed frame, drawn by the overlay
+  (`gpu/shim/bbport_overlay.cpp`), instead of text typed into the window title bar. Enter or OK
+  confirms, Escape or Cancel gives the original name back; the game's own dialog blocks your pad
+  input meanwhile. The old title-bar text entry and its state machine in `gpu/shim/window.cpp`
+  are gone. `BB_IME_TEXT=Vincent` answers the next dialog without asking (useful for scripted
+  runs).
+- *Agent launches show the overlay.* A minimized window (`BB_MINIMIZED=1`) draws the settings
+  menu and the text dialog into the captured frame, so a screenshot taken through
+  `tools/mcp/bbport_mcp.py` shows what a player would see. Previously the overlay was drawn only
+  into the swapchain, which a minimized window never presents.
+- *`ime` on the control channel.* `BB_CONTROL` gained an `ime <name>` command that opens the same
+  dialog the game opens (`sceImeDialogInit`), so the box can be exercised without playing to a
+  naming screen. `status` reports `text_input: 1` while it is open.
+
+Everything else in the Windows section above is upstream's; see `README.fork.md` for the fork's
+aims and the release policy.
 
 How it differs from Linux, all on the Win32 API directly (no POSIX layer): the guest address
 space is reserved at start as one placeholder and mapped with section views

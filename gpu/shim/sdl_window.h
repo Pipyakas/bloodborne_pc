@@ -32,23 +32,12 @@ public:
     bool IsMinimized() const { return is_minimized.load(std::memory_order_relaxed); }
     /// Processes pending window events. Returns false once the user closed the window.
     bool PollEvents();
-    /// Keyboard text entry for the system IME dialog; typed text shows in the title bar.
-    void BeginTextInput(const std::string& initial, const std::string& prompt);
-    /// 0 while typing, 1 confirmed (Enter), 2 cancelled (Escape); text is UTF-8.
-    int PollTextInput(std::string& text);
-    /// Control channel: confirms the open text entry with `text`; false when none is open.
-    bool SubmitText(const std::string& text);
-    bool TextInputActive();
 
 private:
     std::atomic<s32> width, height;
     std::atomic<bool> is_open{true};
     std::atomic<bool> is_minimized{false};
-    std::mutex text_mutex;
-    bool text_requested{}, text_active{}, text_stop_requested{};
-    int text_state{};
-    std::string text, text_prompt, base_title;
-    void UpdateTextTitle();
+    std::string base_title;
     /// Cursor hiding (hide_cursor): shown on mouse motion, hidden after a pause or a pad input.
     void UpdateCursor(const union SDL_Event* event);
     u64 last_mouse_motion_ms{};

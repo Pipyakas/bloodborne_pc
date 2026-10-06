@@ -86,61 +86,10 @@ WindowSDL::~WindowSDL() {
     SDL_DestroyWindow(window);
 }
 
-void WindowSDL::BeginTextInput(const std::string& initial, const std::string& prompt) {
-    std::scoped_lock lock{text_mutex};
-    text = initial;
-    text_prompt = prompt;
-    text_state = 0;
-    text_requested = true;
-}
-
-int WindowSDL::PollTextInput(std::string& out) {
-    std::scoped_lock lock{text_mutex};
-    out = text;
-    return text_state;
-}
-
-bool WindowSDL::SubmitText(const std::string& submitted) {
-    std::scoped_lock lock{text_mutex};
-    if (!text_requested && !text_active) {
-        return false;
-    }
-    text = submitted;
-    text_state = 1;
-    text_stop_requested = text_active;
-    text_requested = text_active = false;
-    return true;
-}
-
-bool WindowSDL::TextInputActive() {
-    std::scoped_lock lock{text_mutex};
-    return text_requested || text_active;
-}
-
-void WindowSDL::UpdateTextTitle() {
-    const std::string title = text_active ? base_title + " \u2014 " + text_prompt + ": " + text + "_  (Enter = OK, Esc = cancel)"
-                                          : base_title;
-    SDL_SetWindowTitle(window, title.c_str());
-}
-
 bool WindowSDL::PollEvents() {
-    {
-        std::scoped_lock lock{text_mutex};
-        if (text_requested) { // SDL text input must be toggled from the window thread
-            text_requested = false;
-            text_active = true;
-            SDL_StartTextInput(window);
-            UpdateTextTitle();
-        }
-        if (text_stop_requested) { // SubmitText
-            text_stop_requested = false;
-            SDL_StopTextInput(window);
-            UpdateTextTitle();
-        }
-    }
-    if (!text_active) {
-        BbOverlay::UpdateTextInput(window);
-    }
+    // The system text dialog is an ImGui overlay (bbport_overlay.cpp): it draws a centered
+    // input box over a dimmed frame and takes the keyboard and mouse while it is open.
+    BbOverlay::UpdateTextInput(window);
     BbNative::Poll(); // the game's options screen edits the port's settings
     ApplyScreenMode();
     SDL_Event event;
@@ -149,22 +98,6 @@ bool WindowSDL::PollEvents() {
         UpdateCursor(&event);
         if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED || event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
             BbSettings::Get().window_focused = event.type == SDL_EVENT_WINDOW_FOCUS_GAINED;
-        }
-        if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
-            std::scoped_lock lock{text_mutex};
-            if (event.type == SDL_EVENT_TEXT_INPUT) {
-                text += event.text.text;
-            } else if (event.key.key == SDLK_BACKSPACE && !text.empty()) {
-                size_t cut = text.size() - 1; // drop one UTF-8 code point
-                while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) --cut;
-                text.erase(cut);
-            } else if (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER || event.key.key == SDLK_ESCAPE) {
-                text_state = event.key.key == SDLK_ESCAPE ? 2 : 1;
-                text_active = false;
-                SDL_StopTextInput(window);
-            }
-            UpdateTextTitle();
-            continue;
         }
         if (BbOverlay::HandleEvent(event)) {
             continue;

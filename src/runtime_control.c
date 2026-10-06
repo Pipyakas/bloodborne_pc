@@ -102,6 +102,11 @@ static void command(Socket client, char *line) {
     } else if (!strcmp(name, "text")) {
         if (bbgpu_text_input_submit(rest)) reply(client, "ok");
         else reply(client, "error no text entry is open");
+    } else if (!strcmp(name, "ime")) {
+        // Opens the same centered input box the PS4 system IME shows, through the entry point
+        // the guest uses (sceImeDialogInit), so it can be tested without playing to a prompt.
+        if (bbgpu_text_input_begin(rest, "Enter a name")) reply(client, "ok");
+        else reply(client, "error the text dialog could not open");
     } else if (!strcmp(name, "quit")) {
         reply(client, "ok");
         puts("Runtime: quit through the control channel");

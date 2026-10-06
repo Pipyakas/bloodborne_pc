@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <vector>
 
 #include <SDL3/SDL.h>
 #include "bbport_settings.h"
@@ -52,17 +53,144 @@ bool initialized = false;
 std::atomic<bool> menu_open{false};
 bool l3_down = false, r3_down = false;
 bool dirty = false; // settings changed while open: saved on close
-float base_scale = 1.0f;
+float base_scale = 1.0f; // UI scale factor for the display height (1080p = 1)
 
-// Present rate for the FPS counter.
+// System text entry (the PS4 IME dialog), drawn as an input box over a dimmed frame. The game
+// thread (runtime_services.c) opens it and polls it; the window thread feeds it SDL input and
+// the present thread draws it, so every access to these fields takes imgui_mutex.
+struct TextDialog {
+    bool open = false;          // an entry is in progress (the guest is polling)
+    int state = 0;              // 0 typing, 1 confirmed, 2 cancelled
+    std::string text;           // UTF-8, the value the guest reads
+    std::string title;          // the prompt above the box
+    std::string initial;        // the value to restore when cancelled
+    std::size_t capacity = 255;  // the guest's buffer size in code points
+    std::size_t cursor = 0;     // caret, in code points from the start
+} text_dialog;
+std::atomic<bool> text_input_open{false}; // readable without imgui_mutex
+
+// Present rate for the FPS counter (Render measures the interval between presents).
 std::chrono::steady_clock::time_point last_present{};
 float frame_ms_avg = 0.0f;
+
+// Code points in a UTF-8 string up to `cursor` (caret positions are code points, so multi-byte
+// characters cannot be split).
+std::vector<std::string> SplitCodePoints(const std::string& utf8) {
+    std::vector<std::string> out;
+    for (size_t i = 0; i < utf8.size();) {
+        size_t n = 1;
+        while (i + n < utf8.size() && (static_cast<unsigned char>(utf8[i + n]) & 0xC0) == 0x80) {
+            ++n;
+        }
+        out.push_back(utf8.substr(i, n));
+        i += n;
+    }
+    return out;
+}
+
+// The centered input box with a dimmed backdrop, drawn over the game frame.
+// The game's IME buffer is UTF-16 with a bounded length; the dialog must not grow past it.
+std::size_t TextCapacity() { return text_dialog.capacity; }
+
+void ClampTextToCapacity() {
+    const std::vector<std::string> points = SplitCodePoints(text_dialog.text);
+    if (points.size() <= TextCapacity()) {
+        return;
+    }
+    std::string kept;
+    for (std::size_t i = 0; i < TextCapacity(); ++i) {
+        kept += points[i];
+    }
+    text_dialog.text = kept;
+}
+
+void NormalizeCaret() {
+    text_dialog.cursor = std::min(text_dialog.cursor, SplitCodePoints(text_dialog.text).size());
+}
+
+// Closes the entry with `state` (1 confirmed, 2 cancelled) and hands the result to the guest.
+void FinishTextInput(int state) {
+    if (state != 1) { // a cancelled entry leaves the guest's buffer as it was
+        text_dialog.text = text_dialog.initial;
+    }
+    text_dialog.state = state;
+    text_dialog.open = false;
+    text_input_open = false;
+    // The cursor follows the settings menu again (both cannot be open at once).
+    ImGui::GetIO().MouseDrawCursor = menu_open;
+}
+
+// The centered input box over a dimmed frame: the PS4 system text dialog, drawn like one.
+void TextDialogWindow() {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImDrawList* draw = ImGui::GetBackgroundDrawList();
+    draw->AddRectFilled(viewport->WorkPos,
+                        ImVec2(viewport->WorkPos.x + viewport->WorkSize.x,
+                               viewport->WorkPos.y + viewport->WorkSize.y),
+                        IM_COL32(0, 0, 0, 150));
+
+    const ImVec2 center = ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+                                 viewport->WorkPos.y + viewport->WorkSize.y * 0.5f);
+    const float width = std::min(560.0f * base_scale, viewport->WorkSize.x * 0.8f);
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(width, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.0f);
+    constexpr ImGuiWindowFlags Flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav |
+                                      ImGuiWindowFlags_AlwaysAutoResize;
+    ImGui::Begin("##bbport_text_input", nullptr, Flags);
+    // Centered title without PushTextAlign (this ImGui version has no text-align stack): the
+    // title is drawn in the window's own horizontal offset, so a window-padding offset is
+    // computed from the remaining width.
+    const float title_width = ImGui::CalcTextSize(text_dialog.title.c_str()).x;
+    const float title_offset = std::max(0.0f, (width - title_width) * 0.5f - ImGui::GetStyle().WindowPadding.x);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + title_offset);
+    ImGui::TextUnformatted(text_dialog.title.c_str());
+
+    // The value, in a framed field: it accepts typing directly, like the PS4 dialog, and the
+    // buttons below take Enter (OK) and Escape (Cancel) the way the game's dialogs do.
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.06f, 0.06f, 0.07f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.08f, 0.08f, 0.09f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.10f, 0.10f, 0.12f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * base_scale, 8.0f * base_scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.55f, 0.48f, 0.32f, 1.0f));
+    if (ImGui::InputText("##bbport_text_value", text_dialog.text.data(), TextCapacity() + 1)) {
+        ClampTextToCapacity();
+    }
+    ImGui::PopStyleColor(4); // FrameBg, FrameBgHovered, FrameBgActive, Border
+    ImGui::PopStyleVar(2);
+    ImGui::SetItemDefaultFocus();
+
+    ImGui::Spacing();
+    // Buttons take half the box each: a Button sizes itself from its label unless an explicit
+    // size is given, so the width is passed to the label.
+    const ImVec2 button_size((width - ImGui::GetStyle().ItemSpacing.x) * 0.5f,
+                             ImGui::GetTextLineHeightWithSpacing() * 1.6f);
+    if (ImGui::Button("OK", button_size)) {
+        FinishTextInput(1);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", button_size)) {
+        FinishTextInput(2);
+    }
+    ImGui::End();
+
+    // Enter confirms and Escape cancels, the way the game's own system dialogs do.
+    NormalizeCaret();
+    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
+        FinishTextInput(1);
+    } else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        FinishTextInput(2);
+    }
+}
 
 void SetOpen(bool value) {
     if (menu_open.exchange(value) == value) {
         return;
     }
-    ImGui::GetIO().MouseDrawCursor = value;
+    ImGui::GetIO().MouseDrawCursor = value || text_dialog.open;
     if (!value && dirty) {
         dirty = false;
         BbSettings::Save();
@@ -585,7 +713,8 @@ void UpdateTextInput(SDL_Window* window) {
     bool want = false;
     {
         std::scoped_lock lock{imgui_mutex};
-        want = initialized && menu_open && ImGui::GetIO().WantTextInput;
+        // The menu edits a value only while a field is active; the text dialog always wants it.
+        want = initialized && (text_dialog.open || (menu_open && ImGui::GetIO().WantTextInput));
     }
     if (want != SDL_TextInputActive(window)) {
         if (want) {
@@ -602,14 +731,18 @@ bool HandleEvent(const SDL_Event& event) {
         return false;
     }
     ImGuiIO& io = ImGui::GetIO();
-    const bool is_open = menu_open;
+    // While the text dialog is open it takes every key and character: the game's own dialogs
+    // are modal, and the game's pad input is held neutral meanwhile (CapturesInput).
+    const bool text_open = text_dialog.open;
+    const bool is_open = menu_open || text_open;
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
         const bool down = event.type == SDL_EVENT_KEY_DOWN;
-        // F1 (Insert, the old key, still works) toggles; Escape closes.
-        const bool toggle = event.key.key == SDLK_F1 || event.key.key == SDLK_INSERT;
-        if (down && !event.key.repeat && (toggle || (is_open && event.key.key == SDLK_ESCAPE))) {
+        // F1 (Insert, the old key, still works) toggles; Escape closes. With the text dialog
+        // open, Escape belongs to the dialog (TextDialogWindow reads KeyEscape).
+        const bool toggle = !text_open && (event.key.key == SDLK_F1 || event.key.key == SDLK_INSERT);
+        if (down && !event.key.repeat && (toggle || (is_open && !text_open && event.key.key == SDLK_ESCAPE))) {
             SetOpen(toggle ? !is_open : false);
             return true;
         }
@@ -687,12 +820,52 @@ bool HandleEvent(const SDL_Event& event) {
     }
 }
 
+bool BeginTextInput(const std::string& initial, const std::string& title) {
+    std::scoped_lock lock{imgui_mutex};
+    if (!initialized) {
+        return false; // no overlay yet (before the first present): the guest falls back
+    }
+    text_dialog.text = initial;
+    text_dialog.initial = initial;
+    text_dialog.title = title;
+    text_dialog.cursor = SplitCodePoints(initial).size();
+    text_dialog.state = 0;
+    text_dialog.open = true;
+    text_input_open = true;
+    // The dialog is modal: the cursor stays visible while it is up, whatever the settings menu
+    // did before.
+    ImGui::GetIO().MouseDrawCursor = true;
+    std::printf("Overlay: text dialog opened (%s)\n", title.c_str());
+    return true;
+}
+
+int PollTextInput(std::string& out) {
+    std::scoped_lock lock{imgui_mutex};
+    if (!text_dialog.open) {
+        return 2; // nothing open: the guest's fallback path
+    }
+    out = text_dialog.text;
+    return text_dialog.state;
+}
+
+bool SubmitText(const std::string& submitted) {
+    std::scoped_lock lock{imgui_mutex};
+    if (!text_dialog.open) {
+        return false;
+    }
+    text_dialog.text = submitted;
+    FinishTextInput(1);
+    return true;
+}
+
+bool TextInputActive() { return text_input_open.load(std::memory_order_acquire); }
+
 bool Visible() {
-    return initialized && (menu_open || BbSettings::Get().show_fps);
+    return initialized && (menu_open || text_dialog.open || BbSettings::Get().show_fps);
 }
 
 bool CapturesInput() {
-    return menu_open;
+    return menu_open || text_dialog.open;
 }
 
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
@@ -707,6 +880,9 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
         return;
     }
     std::scoped_lock lock{imgui_mutex};
+    if (!initialized) {
+        return;
+    }
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(float(extent.width), float(extent.height));
     io.DeltaTime = ms > 0.0f && ms < 1000.0f ? ms / 1000.0f : 1.0f / 60.0f;
@@ -726,6 +902,10 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     }
     if (BbSettings::Get().show_fps && !menu_open) {
         FpsCounter();
+    }
+    // The system text dialog draws last: it is modal, with a dimmed frame behind it.
+    if (text_dialog.open) {
+        TextDialogWindow();
     }
     ImGui::Render();
 

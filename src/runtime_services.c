@@ -213,7 +213,8 @@ static int32_t dialog_term(int i) {
     static ABI int32_t tag##_term(void) { return dialog_term(i); }
 DIALOG(msg,1) DIALOG(save,2) DIALOG(profile,3) DIALOG(commerce,4)
 static ABI int32_t profile_result(void *result) { if (result) memset(result,0,4); return 0; }
-/* ImeDialog: text typed on the keyboard into the game window (title bar shows it).
+/* ImeDialog: text typed on the keyboard into the centered on-screen input box that the GPU
+ * library draws over a dimmed frame (bbgpu_text_input_begin; bbport_overlay.cpp).
  * OrbisImeDialogParam: user, type, languages(8), enter label, method, filter,
  * option, max length, char16 buffer, position, alignment, placeholder, title. */
 typedef struct {
@@ -250,7 +251,8 @@ static void utf8_to_utf16(const char *in, uint16_t *out, uint32_t max) {
 static void ime_complete(int end_status, const char *text) {
     if (!end_status && ime.buffer && ime.max_length) utf8_to_utf16(text,ime.buffer,ime.max_length);
     ime.end_status=end_status; ime.finished=1; ime.running=0;
-    printf("Runtime: ImeDialog %s%s%s\n",end_status ? "cancelled" : "text: ",end_status ? "" : text,"");
+    if (end_status) printf("Runtime: ImeDialog cancelled\n");
+    else printf("Runtime: ImeDialog text: %s\n",text ? text : "");
 }
 static ABI int32_t ime_init(const ImeParam *param, const void *extended) {
     (void)extended;
@@ -266,7 +268,7 @@ static ABI int32_t ime_init(const ImeParam *param, const void *extended) {
     if (!bbgpu_text_input_begin(initial,prompt[0] ? prompt : "Text")) {
         const char *name=getenv("BB_USER_NAME");
         ime_complete(0,name ? name : initial[0] ? initial : "Hunter");
-    } else printf("Runtime: ImeDialog opened: type in the game window, Enter to confirm, Esc to cancel\n");
+    } else printf("Runtime: ImeDialog opened: type in the on-screen box, Enter to confirm, Esc to cancel\n");
     return 0;
 }
 static ABI int32_t ime_status(void) {

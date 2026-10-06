@@ -542,6 +542,25 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         };
         cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
                                vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, barrier);
+        // bbport: an overlay (the settings menu, or the system text dialog) still has to reach
+        // the captured frame in a minimized window: the game is waiting on it (the dialog blocks
+        // its pad input), so draw it into the frame itself before the screenshot is taken.
+        if (BbOverlay::Visible()) {
+            BbOverlay::Render(cmdbuf, frame->image_view,
+                              vk::Extent2D{frame->width, frame->height});
+            const vk::ImageMemoryBarrier after_overlay{
+                .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+                .dstAccessMask = vk::AccessFlagBits::eTransferRead,
+                .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
+                .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = frame->image,
+                .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+            };
+            cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                                   vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, after_overlay);
+        }
         BbCapture::Record(instance, scheduler, cmdbuf, frame->image, swapchain.GetSurfaceFormat().format,
                           frame->width, frame->height);
         barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
