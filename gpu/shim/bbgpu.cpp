@@ -364,22 +364,22 @@ extern "C" int bbgpu_overlay_captures_input(void) {
 
 extern "C" int bbgpu_text_input_begin(const char* initial, const char* prompt) {
     if (!g_window) return 0;
-    g_window->BeginTextInput(initial ? initial : "", prompt ? prompt : "Text");
-    return 1;
+    // The system text dialog is drawn by the overlay (bbport_overlay.cpp) as a centered input
+    // box over a dimmed frame; the window title never shows the text.
+    return BbOverlay::BeginTextInput(initial ? initial : "", prompt ? prompt : "Text") ? 1 : 0;
 }
 
 extern "C" int bbgpu_text_input_submit(const char* text) {
-    return g_window && g_window->SubmitText(text ? text : "") ? 1 : 0;
+    return BbOverlay::SubmitText(text ? text : "") ? 1 : 0;
 }
 
 extern "C" int bbgpu_text_input_active(void) {
-    return g_window && g_window->TextInputActive() ? 1 : 0;
+    return BbOverlay::TextInputActive() ? 1 : 0;
 }
 
 extern "C" int bbgpu_text_input_poll(char* out, uint64_t size) {
-    if (!g_window) return 2;
     std::string text;
-    const int state = g_window->PollTextInput(text);
+    const int state = BbOverlay::PollTextInput(text);
     if (size) {
         const size_t n = std::min<size_t>(text.size(), size - 1);
         std::memcpy(out, text.data(), n);
