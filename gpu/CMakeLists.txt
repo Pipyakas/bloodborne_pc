@@ -212,6 +212,9 @@ else()
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
+add_executable(frame-gen-pacing-test EXCLUDE_FROM_ALL ../tests/test_frame_gen_pacing.cpp)
+target_compile_options(frame-gen-pacing-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(frame-gen-pacing-test PRIVATE ..)
 add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)
 target_compile_options(motion-history-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(motion-history-test PRIVATE ..)
