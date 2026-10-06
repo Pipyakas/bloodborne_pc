@@ -34,6 +34,8 @@ struct Row {
     int default_value;
     /// A choice row's entries: their count, *labels set.
     int (*choices)(const char16_t* const** labels) = nullptr;
+    /// Whether the row is shown (null: always), read when its screen opens.
+    bool (*shown)(const Values&) = nullptr;
 };
 
 int EffectIndex(const char* key) {
@@ -71,6 +73,17 @@ const char16_t* const OutputLabels[] = {u"1280 x 720", u"1920 x 1080", u"2560 x 
 const char16_t* const ScreenModeLabels[] = {u"Windowed", u"Maximised window", u"Full screen"};
 const char16_t* const FrameLimitLabels[BbSettings::FrameLimitCount] = {
     u"Display refresh rate", u"30 FPS", u"60 FPS", u"90 FPS", u"120 FPS"};
+// BbSettings::DlssModels and FrameGen, in their order.
+const char16_t* const DlssModelLabels[] = {u"Auto", u"DLSS 3 CNN (E)", u"DLSS 4 Transformer (J)",
+                                           u"DLSS 4 Transformer (K)", u"DLSS 4.5 Transformer 2 (M)",
+                                           u"DLSS 4.5 Transformer 2 (L)"};
+static_assert(std::size(DlssModelLabels) == BbSettings::DlssModelCount);
+const char16_t* const FrameGenLabels[] = {u"Off", u"2x", u"3x (multi frame)", u"4x (multi frame)",
+                                          u"Dynamic (multi frame)"};
+static_assert(std::size(FrameGenLabels) == BbSettings::FrameGenCount);
+
+// The Upscaler row's default: the entry of the settings' default (DLSS, else FSR 3.1).
+constexpr int UpscalerDefault = -1;
 
 template <size_t N>
 int Labels(const char16_t* const (&list)[N], const char16_t* const** out) {
@@ -126,7 +139,8 @@ const Row rows[] = {
          }
          return 0;
      },
-     [](Values& v, int i) { v.upscaler = upscalers[std::clamp(i, 0, upscaler_count - 1)]; }, 1,
+     [](Values& v, int i) { v.upscaler = upscalers[std::clamp(i, 0, upscaler_count - 1)]; },
+     UpscalerDefault,
      [](const char16_t* const** out) {
          *out = upscaler_labels.data();
          return upscaler_count;
@@ -134,7 +148,20 @@ const Row rows[] = {
     {BB_NATIVE_UPSCALING, u"Upscaling quality", u"Render resolution: Native renders at the output resolution.",
      Choice, [](const Values& v) { return v.preset.load(); },
      [](Values& v, int i) { v.preset = std::clamp(i, 0, BbSettings::PresetCount - 1); },
-     BbSettings::NativeAA, [](const char16_t* const** out) { return Labels(PresetLabels, out); }},
+     BbSettings::Performance, [](const char16_t* const** out) { return Labels(PresetLabels, out); }},
+    {BB_NATIVE_UPSCALING, u"DLSS model", u"DLSS 3 CNN is the lightest; the transformer models are sharper and heavier.",
+     Choice, [](const Values& v) { return v.dlss_model.load(); },
+     [](Values& v, int i) { v.dlss_model = std::clamp(i, 0, BbSettings::DlssModelCount - 1); }, 1,
+     [](const char16_t* const** out) { return Labels(DlssModelLabels, out); },
+     [](const Values& v) { return v.dlss_supported.load(); }},
+#ifdef _WIN32
+    {BB_NATIVE_UPSCALING, u"Frame generation",
+     u"DLSS frames generated per rendered frame. Switching it on or off applies after a restart.",
+     Choice, [](const Values& v) { return v.frame_gen.load(); },
+     [](Values& v, int i) { v.frame_gen = std::clamp(i, 0, BbSettings::FrameGenCount - 1); },
+     BbSettings::FrameGen4x, [](const char16_t* const** out) { return Labels(FrameGenLabels, out); },
+     [](const Values& v) { return v.dlss_supported.load(); }},
+#endif
     {BB_NATIVE_UPSCALING, u"Sharpness", u"Contrast-adaptive sharpening after upscaling (0: off).", Slider,
      [](const Values& v) {
          return v.sharpen ? int(std::lround(std::clamp(v.sharpness.load(), 0.0f, 1.0f) * 10)) : 0;
@@ -160,6 +187,9 @@ std::array<int32_t, RowCount> values{}, applied{}, defaults{};
 bool open_once = false;
 // The game's "dropdown open" bytes of the open screen's choice rows (guest memory).
 std::array<const volatile uint8_t*, RowCount> dropdown_open{};
+// The open screen's rows (copies of table entries) and their places in rows[].
+std::array<BbNativeSetting, RowCount> screen_rows{};
+std::array<int, RowCount> screen_row_index{};
 
 void BuildChoices() {
     const auto& v = BbSettings::Get();
@@ -189,6 +219,13 @@ int Rows(int screen, const BbNativeSetting** out) {
     for (int r = 0; r < RowCount; ++r) {
         values[r] = applied[r] = rows[r].get(v);
         defaults[r] = rows[r].default_value;
+        if (defaults[r] == UpscalerDefault) {
+            const int wanted = v.dlss_supported ? BbSettings::UpscalerDlss : BbSettings::UpscalerFsr3;
+            defaults[r] = 0;
+            for (int i = 0; i < upscaler_count; ++i) {
+                if (upscalers[i] == wanted) defaults[r] = i;
+            }
+        }
         auto& t = table[r];
         t.label = reinterpret_cast<const uint16_t*>(rows[r].label);
         t.help = reinterpret_cast<const uint16_t*>(rows[r].help);
@@ -204,13 +241,14 @@ int Rows(int screen, const BbNativeSetting** out) {
         }
     }
     open_once = true;
-    int first = 0, count = 0;
+    int count = 0;
     for (int r = 0; r < RowCount; ++r) {
-        if (rows[r].screen != screen) continue;
-        if (!count) first = r;
+        if (rows[r].screen != screen || (rows[r].shown && !rows[r].shown(v))) continue;
+        screen_rows[count] = table[r];
+        screen_row_index[count] = r;
         ++count;
     }
-    *out = table.data() + first;
+    *out = screen_rows.data();
     return count;
 }
 
@@ -249,8 +287,8 @@ void Apply(bool choices) {
 
 void WatchDropdown(const BbNativeSetting* row, const volatile uint8_t* open) {
     std::scoped_lock lock{mutex};
-    const auto r = row - table.data();
-    if (r >= 0 && r < RowCount) dropdown_open[size_t(r)] = open;
+    const auto k = row - screen_rows.data();
+    if (k >= 0 && k < RowCount) dropdown_open[size_t(screen_row_index[size_t(k)])] = open;
 }
 
 void ForgetDropdowns() {
