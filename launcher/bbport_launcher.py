@@ -97,7 +97,7 @@ INI_DEFAULTS = {
     "show_fps": "1",
     "output_res": "1920x1080",
     "model_lod": "0",
-    "live_resolution": "0",
+    "live_resolution": "auto",
     **{key: "1" if default else "0" for key, _, default in EFFECTS},
 }
 
@@ -373,7 +373,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         screen.add(self.output_row)
         self.live_row = combo_row(tr("Смена разрешения на лету"),
                                   tr("Без перезапуска, но медленнее на Steam Deck и старых GPU"),
-                                  LIVE_RESOLUTION, self.ini.get("live_resolution", "0"))
+                                  LIVE_RESOLUTION, self.ini.get("live_resolution", "auto"))
         screen.add(self.live_row)
         self.fullscreen_row = Adw.SwitchRow(title=tr("Полноэкранный режим"),
                                             active=self.settings["fullscreen"])

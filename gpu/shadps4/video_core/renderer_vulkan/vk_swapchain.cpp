@@ -5,9 +5,11 @@
 #include <limits>
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "bbport_settings.h"
 #include "core/emulator_settings.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
+#include "video_core/renderer_vulkan/vk_frame_gen.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
@@ -23,6 +25,8 @@ Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& windo
     : instance{instance_}, window{window_}, surface{CreateSurface(instance.GetInstance(), window)} {
     FindPresentFormat();
     FindPresentMode();
+    // bbport: frame generation (bbport.ini, at start) presents through DXGI instead.
+    dxgi = FrameGen::Init(instance, window.GetWindowInfo().render_surface);
 
     Create(window.GetWidth(), window.GetHeight());
     ImGui::Core::Initialize(instance, window, image_count, surface_format.format);
@@ -30,6 +34,9 @@ Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& windo
 
 Swapchain::~Swapchain() {
     Destroy();
+    if (dxgi) {
+        FrameGen::Shutdown();
+    }
     instance.GetInstance().destroySurfaceKHR(surface);
 }
 
@@ -39,6 +46,22 @@ void Swapchain::Create(u32 width_, u32 height_) {
     needs_recreation = false;
 
     Destroy();
+    if (dxgi) {
+        // The back buffers have the output size, the frame generation inputs' size; DXGI
+        // stretches them to the window. width/height stay the window's (Presenter checks it).
+        const auto [out_width, out_height] = OutputSize();
+        FrameGen::Resize(out_width, out_height);
+        image_count = FrameGen::ImageCount();
+        extent = vk::Extent2D{out_width, out_height};
+        surface_format = {FrameGen::Format(), vk::ColorSpaceKHR::eSrgbNonlinear};
+        images.clear();
+        images_view.clear();
+        for (u32 i = 0; i < image_count; ++i) {
+            images.push_back(FrameGen::Image(i));
+            images_view.push_back(FrameGen::View(i));
+        }
+        return;
+    }
 
     SetSurfaceProperties();
 
@@ -87,7 +110,7 @@ void Swapchain::Recreate(u32 width_, u32 height_) {
 }
 
 void Swapchain::SetHDR(bool hdr) {
-    if (needs_hdr == hdr) {
+    if (needs_hdr == hdr || dxgi) {
         return;
     }
 
@@ -106,6 +129,13 @@ void Swapchain::SetHDR(bool hdr) {
 }
 
 bool Swapchain::AcquireNextImage() {
+    if (dxgi) {
+        if (const auto [w, h] = OutputSize(); w != extent.width || h != extent.height) {
+            Create(width, height); // the output resolution changed in the menu
+        }
+        image_index = FrameGen::Acquire();
+        return true;
+    }
     vk::Device device = instance.GetDevice();
     vk::Result result =
         device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
@@ -136,6 +166,12 @@ bool Swapchain::AcquireNextImage() {
 }
 
 bool Swapchain::Present() {
+    if (dxgi) {
+        FrameGen::Present(image_index, present_inputs);
+        present_inputs = -1;
+        frame_index = (frame_index + 1) % image_count;
+        return true;
+    }
     const vk::PresentInfoKHR present_info = {
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &present_ready[image_index],
@@ -261,7 +297,32 @@ void Swapchain::SetSurfaceProperties() {
     }
 }
 
+std::pair<u32, u32> Swapchain::OutputSize() const {
+    const int output = BbSettings::Get().output_res;
+    return {u32(BbSettings::OutputWidths[output]), u32(BbSettings::OutputHeights[output])};
+}
+
+void Swapchain::AddAcquireWait(SubmitInfo& info) const {
+    if (!dxgi) {
+        info.AddWait(image_acquired[frame_index]);
+    }
+}
+
+void Swapchain::AddPresentSignal(SubmitInfo& info) const {
+    if (dxgi) {
+        FrameGen::AddPresentSignal(info, image_index);
+    } else {
+        info.AddSignal(present_ready[image_index]);
+    }
+}
+
 void Swapchain::Destroy() {
+    if (dxgi) {
+        // The images belong to FrameGen (D3D12 textures).
+        images.clear();
+        images_view.clear();
+        return;
+    }
     vk::Device device = instance.GetDevice();
     const auto wait_result = device.waitIdle();
     if (wait_result != vk::Result::eSuccess) {

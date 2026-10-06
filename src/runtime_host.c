@@ -78,8 +78,20 @@ uint64_t host_realtime_ns(void) {
 static __thread HANDLE sleep_timer;
 /* High-resolution waitable timers (Windows 10 1803+) wake within ~0.5 ms; the rest of a
  * short wait is spun, so frame pacing and audio deadlines stay precise. */
+/* The high-resolution timer wakes up to ~0.6 ms late (0.5 ms timer ticks): the last part of
+ * each sleep spins for precision. BB_SLEEP_SPIN_US overrides the 600 us; the game sleeps
+ * ~1300 times a second for 1-3 ms, so the spin costs most of a core (CPU power a laptop's GPU
+ * shares). */
+static uint64_t sleep_spin_ns(void) {
+    static uint64_t ns = ~0ull;
+    if (ns == ~0ull) {
+        const char *env = getenv("BB_SLEEP_SPIN_US");
+        ns = env ? strtoull(env, NULL, 10) * 1000 : 600000;
+    }
+    return ns;
+}
 void host_sleep_until_ns(uint64_t deadline) {
-    enum { SPIN_NS = 600000 };
+    const uint64_t SPIN_NS = sleep_spin_ns();
     uint64_t now = host_monotonic_ns();
     if (now >= deadline) return;
     if (deadline - now > SPIN_NS) {
