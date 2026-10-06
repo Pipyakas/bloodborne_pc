@@ -362,7 +362,7 @@ void Menu() {
     }
     Hint("NVIDIA DLSS Frame Generation through Streamline: the game renders one frame and DLSS-G "
          "adds 1-3 generated ones (Dynamic picks the count to reach the display refresh rate). "
-         "The render cap is divided only when generated frames are actually presented. "
+         "The FPS limit caps real rendered frames; generated frames are added on top. "
          "Generation pauses while the window "
          "is not focused (DLSS-G's own rule). Needs an upscaler (DLSS, FSR or TAA); outputs other "
          "than 1080p also give it the scene without the HUD (cleaner UI). Files: out/streamline "

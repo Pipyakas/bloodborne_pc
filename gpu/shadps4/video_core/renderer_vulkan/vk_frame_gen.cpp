@@ -441,15 +441,10 @@ u32 GeneratedFrames(int mode) {
     }
 }
 
-/// Divide the selected frame limit only by frames confirmed presented by DLSS-G. Selecting
-/// 4x is not proof of generation: otherwise a failed/inactive plugin locks a 120 Hz game to 30.
-void ApplyReflex(int mode) {
-    const auto& settings = BbSettings::Get();
-    const u32 limit_us = RenderedLimitUs(EmulatorSettings.GetFrameLimit(), GeneratedFrames(mode) + 1,
-                                       std::max(1, settings.frame_gen_presented.load()),
-                                       settings.frame_gen_active &&
-                                           mode != BbSettings::FrameGenDynamic &&
-                                           mode != BbSettings::FrameGenOff);
+/// The FPS setting caps real rendering, not generated output. 40 real FPS with 4x FG
+/// targets 160 presented FPS; do not divide the base cap to fit the display refresh.
+void ApplyReflex() {
+    const u32 limit_us = RenderedLimitUs(EmulatorSettings.GetFrameLimit());
     if (limit_us == g->reflex_limit_us || !g->slReflexSetOptions) {
         return;
     }
@@ -738,7 +733,7 @@ bool Setup(const Instance& instance, HWND hwnd) {
     }
     FeatureFunction(sl::kFeatureReflex, g->slReflexSetOptions, "slReflexSetOptions");
     FeatureFunction(sl::kFeaturePCL, g->slPCLSetMarker, "slPCLSetMarker");
-    ApplyReflex(BbSettings::Get().frame_gen);
+    ApplyReflex();
 
     DXGI_ADAPTER_DESC1 adapter_desc{};
     g->adapter->GetDesc1(&adapter_desc);
@@ -821,7 +816,7 @@ void ReportStatus(const sl::DLSSGOptions& options) {
     if (g->slDLSSGGetState(sl::ViewportHandle{0}, state, &options) != sl::Result::eOk) {
         settings.frame_gen_active = false;
         settings.frame_gen_presented = 1;
-        SetProblem("DLSS-G status unavailable; rendered-frame cap released");
+        SetProblem("DLSS-G status unavailable; base-frame limit unchanged");
         return;
     }
     const bool requested = options.mode != sl::DLSSGMode::eOff;
@@ -840,7 +835,7 @@ void ReportStatus(const sl::DLSSGOptions& options) {
         SetProblem(text);
     } else if (requested && !on) {
         constexpr const char* inactive =
-            "DLSS-G is not presenting generated frames; rendered-frame cap released";
+            "DLSS-G is not presenting generated frames; base-frame limit unchanged";
         const char* problem = settings.frame_gen_problem.load();
         if (!problem || std::string_view(problem) != inactive) {
             SetProblem(inactive);
@@ -1085,7 +1080,7 @@ bool Present(u32 index, int inputs) {
         settings.frame_gen_active = false;
         settings.frame_gen_presented = 1;
     }
-    ApplyReflex(generate ? mode : BbSettings::FrameGenOff);
+    ApplyReflex();
     return SUCCEEDED(hr);
 }
 

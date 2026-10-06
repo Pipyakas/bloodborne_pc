@@ -5,17 +5,12 @@
 
 int main() {
     using Vulkan::FrameGen::RenderedLimitUs;
-    // Requested 4x must not force 30 FPS when the plugin presents only real frames.
-    assert(RenderedLimitUs(120, 4, 0, true) == 0);
-    assert(RenderedLimitUs(120, 4, 1, true) == 0);
-    assert(RenderedLimitUs(120, 4, 4, true) == 33333);
-    assert(RenderedLimitUs(120, 4, 2, true) == 16666);
-    assert(RenderedLimitUs(120, 2, 4, true) == 16666);
-    assert(RenderedLimitUs(120, 3, 3, true) == 25000);
-    // Respect lower selected limits, and no divided cap for off/dynamic/uncapped modes.
-    assert(RenderedLimitUs(60, 4, 4, true) == 66666);
-    assert(RenderedLimitUs(120, 1, 4, true) == 0);
-    assert(RenderedLimitUs(120, 4, 4, false) == 0);
-    assert(RenderedLimitUs(0, 4, 4, true) == 0);
-    std::puts("Frame generation pacing: PASS (inactive, confirmed multipliers, limits, dynamic)");
+    // The helper deliberately accepts no FG multiplier: 4x must never turn 40 into 10
+    // or 120 into 30. The same base cap applies with FG off, dynamic, 2x, 3x or 4x.
+    assert(RenderedLimitUs(40) == 25000);
+    assert(RenderedLimitUs(120) == 8333);
+    assert(RenderedLimitUs(60) == 16666);
+    assert(RenderedLimitUs(30) == 33333);
+    assert(RenderedLimitUs(0) == 0);
+    std::puts("Frame generation pacing: PASS (base-frame limits, no multiplier division)");
 }
