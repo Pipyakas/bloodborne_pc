@@ -87,15 +87,25 @@ static void touch_click(PadData *d, int right) {
 /* Opens the first gamepad SDL knows about; called under lock. */
 static SDL_Gamepad *current_gamepad(void) {
     if (host_input_off()) return NULL;
-    if (!sdl_ready) sdl_ready = SDL_WasInit(SDL_INIT_GAMEPAD) ? 1 : SDL_InitSubSystem(SDL_INIT_GAMEPAD) ? 1 : -1;
-    if (sdl_ready<0) return NULL;
-    if (gamepad && !SDL_GamepadConnected(gamepad)) { SDL_CloseGamepad(gamepad); gamepad=NULL; }
+    /* Do not permanently cache an initialization failure: the window may initialize
+     * SDL later. Refresh devices and input here too, not only in the window's pump,
+     * so a controller connected after startup becomes usable on the next pad read. */
+    if (!SDL_WasInit(SDL_INIT_GAMEPAD) && !SDL_InitSubSystem(SDL_INIT_GAMEPAD)) return NULL;
+    sdl_ready=1;
+    SDL_UpdateGamepads();
+    if (gamepad && !SDL_GamepadConnected(gamepad)) {
+        SDL_CloseGamepad(gamepad); gamepad=NULL;
+        puts("Runtime: gamepad disconnected (keyboard remains available)");
+    }
     if (!gamepad) {
         int count=0;
         SDL_JoystickID *ids=SDL_GetGamepads(&count);
-        if (ids && count>0) {
-            gamepad=SDL_OpenGamepad(ids[0]);
-            if (gamepad) { ++connected_count; printf("Runtime: gamepad connected: %s\n",SDL_GetGamepadName(gamepad)); }
+        for (int i=0;ids && i<count && !gamepad;++i) {
+            gamepad=SDL_OpenGamepad(ids[i]);
+            if (gamepad) {
+                if (++connected_count==0) connected_count=1;
+                printf("Runtime: gamepad connected: %s\n",SDL_GetGamepadName(gamepad));
+            }
         }
         SDL_free(ids);
     }
@@ -105,9 +115,9 @@ static void sample_host(PadData *d) {
     memset(d,0,sizeof(*d));
     d->left_x=d->left_y=d->right_x=d->right_y=128;
     d->orientation[3]=1.0f;
-    d->connected=1; d->connected_count=connected_count ? connected_count : 1;
     d->timestamp=now_us();
     SDL_Gamepad *g=current_gamepad();
+    d->connected=1; d->connected_count=connected_count ? connected_count : 1;
     /* BB_HIDDEN: no host keyboard (current_gamepad gives no gamepad either). */
     const bool *k=SDL_WasInit(SDL_INIT_VIDEO) && !host_input_off() ? SDL_GetKeyboardState(NULL) : NULL;
     /* Keys still held from the settings menu (Escape closing it) stay out of the game
