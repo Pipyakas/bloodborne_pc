@@ -16,7 +16,7 @@
  * Play Offline, then Continue / Load Game / New Game / System.
  *
  * Options screen (title System and in-game Options; builder 0x1bb3ad0): a "Graphics" row
- * after Brightness opens a list of its own (Screen, Advanced options, Upscaling), each row
+ * after Brightness opens a list of its own (Screen, Upscaling, Advanced options), each row
  * a sub-screen opened the way Environment is (the same sprite, the game's on/off, choice
  * and slider rows) whose rows edit the port's settings (bbgpu_native_settings). Its texts are the game's text objects pointing at our own
  * strings, so no game file changes.
@@ -503,8 +503,8 @@ static ABI void **graphics_row(void **step, void *arg) {
     *(void **)(list + LIST_OWNER) = arg;
     list[LIST_OWNER + 8] = 0;
     add_option_row(list, BB_NATIVE_SCREEN, (void *)screen_row);
-    add_option_row(list, BB_NATIVE_ADVANCED, (void *)advanced_row);
     add_option_row(list, BB_NATIVE_UPSCALING, (void *)upscaling_row);
+    add_option_row(list, BB_NATIVE_ADVANCED, (void *)advanced_row);
     Callback shown = {.table = (const void *const *)(guest + LIST_STEP_TABLE)};
     shown.active = &shown;
     *step = NULL;

@@ -19,6 +19,13 @@
 
 int main() {
     using namespace Vulkan;
+    // render_scale / dynamic resolution: percent of the output, even dimensions.
+    assert((SceneResolution::ForScale(100, {1920, 1080}) == SceneResolution::Size{1920, 1080}));
+    assert((SceneResolution::ForScale(50, {1920, 1080}) == SceneResolution::Size{960, 540}));
+    assert((SceneResolution::ForScale(5, {1920, 1080}) == SceneResolution::Size{96, 54}));
+    assert((SceneResolution::ForScale(75, {2560, 1440}) == SceneResolution::Size{1920, 1080}));
+    assert((SceneResolution::ForScale(200, {2560, 1440}) == SceneResolution::Size{5120, 2880}));
+    assert((SceneResolution::ForScale(35, {3840, 2160}) == SceneResolution::Size{1344, 756}));
     Instance instance(0, false);
     // Calls emitted by this executable use a local dispatcher. libbbgpu.so initializes
     // its own default dispatcher while constructing Instance.

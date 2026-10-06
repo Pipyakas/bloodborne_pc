@@ -10,6 +10,9 @@
 #include "video_core/texture_cache/image.h"
 
 namespace VideoCore { class TextureCache; }
+struct VmaAllocation_T;
+struct VmaAllocator_T;
+
 namespace Vulkan {
 class Instance;
 class Runtime;
@@ -33,6 +36,11 @@ public:
     bool EligibleScene(const VideoCore::Image&) const;
     /// The proxy size of an eligible image: the scene size divided like the native size.
     SceneResolution::Size ProxySize(const VideoCore::Image&, u32 level = 0) const;
+    /// The largest scene size proxies may take (the preset's, or 100% with dynamic resolution):
+    /// their memory is allocated for it once.
+    void SetMaxSize(SceneResolution::Size s) {
+        max_size = s;
+    }
     struct Target {
         vk::Image image;
         vk::ImageView view;
@@ -40,9 +48,10 @@ public:
         vk::ImageUsageFlags usage;
     };
     Target Attachment(VideoCore::ImageId, const VideoCore::ImageViewInfo&);
+    /// `ngx`: DLSS reads the proxy, so it is parked instead of destroyed on resize (`parked`).
     Target Read(VideoCore::ImageId, const VideoCore::ImageViewInfo&,
                 vk::PipelineStageFlags2 = vk::PipelineStageFlagBits2::eComputeShader,
-                vk::AccessFlags2 = vk::AccessFlagBits2::eShaderRead);
+                vk::AccessFlags2 = vk::AccessFlagBits2::eShaderRead, bool ngx = false);
     /// Resolve/invalidate only the accessed mip levels; no range means the whole image.
     void NativeAccess(VideoCore::Image&, vk::AccessFlags2,
                       std::optional<VideoCore::SubresourceRange> = {});
@@ -76,14 +85,26 @@ public:
                     const VideoCore::SubresourceRange& range);
     bool debug = false; ///< BB_SCENE_DEBUG frame: print resolves and fills
 private:
+    /// A proxy's memory. Sized with headroom over the render size, so dynamic resolution
+    /// steps (5-10%) create their images on it instead of allocating; freed when no image
+    /// uses it and its proxy was not used at the last size.
+    struct Backing {
+        VmaAllocator_T* allocator;
+        VmaAllocation_T* allocation;
+        vk::DeviceSize size;
+        u32 memory_type;
+        ~Backing();
+    };
     struct Entry {
         VideoCore::ImageId source{};
         u64 uid = 0;
         u32 level = 0; ///< mip level of the native image this proxy stands for
+        std::shared_ptr<Backing> memory; ///< outlives the image (declared before it)
         VideoCore::UniqueImage image;
         std::vector<std::pair<VideoCore::ImageViewInfo, vk::UniqueImageView>> views;
         vk::ImageLayout layout = vk::ImageLayout::eUndefined;
         SceneResolution::Coherence state;
+        bool kept = false; ///< read by DLSS: parked, not destroyed, on resize
     };
     static constexpr u64 Key(u64 uid, u32 level) {
         return uid << 4 | level;
@@ -110,6 +131,14 @@ private:
     Lookup lookup;
     SceneResolution::Size size;
     std::unordered_map<u64, std::unique_ptr<Entry>> entries; ///< by Key(uid, level)
+    /// Proxies the upscaler read, from earlier sizes. NGX caches image views by handle: a
+    /// destroyed view whose handle the driver reuses for a new proxy makes DLSS read through
+    /// the stale cache entry (striped, smeared output after live preset or output changes).
+    /// They stay alive for the session and are reused when their size returns.
+    std::vector<std::unique_ptr<Entry>> parked;
+    /// The memory of each proxy (by Key) for the next image at another size.
+    std::unordered_map<u64, std::shared_ptr<Backing>> backings;
+    SceneResolution::Size max_size{};
     std::unordered_set<u64> tracked; ///< uids with proxies
     bool copying = false;
     bool force_stencil_bits = false; ///< test the portable resampler on any driver

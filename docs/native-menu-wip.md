@@ -2,28 +2,16 @@
 
 These changes are on `native-menu`, not the playable master build.
 
-## Custom render percentage
+## Render-resolution integration
 
-The native Upscaling screen replaces the quality dropdown with a render-resolution
-slider: 50–100% of output width and height, in 5% steps. Its native 0–10 scale is
-explained by the help text (0 = 50%, 10 = 100%). Output resolution is unchanged.
-The setting is `render_percent`; 0 retains the legacy `preset` setting. Existing
-settings are not converted until the slider is changed. The ImGui fallback offers
-the custom percentage too; selecting a legacy quality preset there clears the
-custom override.
+The merge from master retains its newer `render_scale`/`dynamic_resolution`
+implementation, including smooth dynamic transitions and upscaler history.
+The unverified `render_percent` prototype from `bf1f56d` is superseded; its code
+and standalone test are retained in that historical commit, not the current tree.
+Using both percentage settings would create competing render-size policies.
 
-FSR/DLSS use the custom dimensions, rounded to even pixels for half-resolution
-effects. Slider changes apply without closing the page. Off and TAA stay at 100%.
-An explicit startup-patched `BB_RENDER_RES` session still requires a restart;
-the patch preparation code understands custom percentages as well.
-
-Tests: standalone `tests/test_render_percent.cpp` covers immediate native slider
-application, persistence, dimensions and Off/TAA behavior. Run it with a disposable
-configuration-file path as its argument. `python -m unittest discover -s tests
--p test_patches.py` covers startup patch dimensions. CLANG64 worktree build passes.
-In-game layout, live GPU transitions, DLSS/FSR output and cancellation still need
-runtime validation. In particular, a legacy Ultra Performance preset below 50%
-remains active until the user moves the new slider.
+The requested native custom-percentage slider still needs adapting to master's
+menu/settings model. This merge does not claim that UI request is finished.
 
 ## Offline main-menu Back
 
@@ -33,4 +21,4 @@ the initial Online/Offline list. Syntax checking passes, but the resulting nativ
 transition must be verified in a game run before this can be called a working
 Circle/Esc Back action. It does not implement online services.
 
-Runtime testing is deferred while the shared GPU benchmark lock is active.
+Do not merge this Back candidate into playable master without runtime validation.

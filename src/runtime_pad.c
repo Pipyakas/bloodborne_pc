@@ -337,6 +337,9 @@ static void sample(PadData *d) {
     if (injected.buttons & BTN_R2) d->r2=255;
     uint8_t *axes[4]={&d->left_x,&d->left_y,&d->right_x,&d->right_y};
     for (int i=0;i<4;++i) if (injected.stick[i]>=0) *axes[i]=(uint8_t)injected.stick[i];
+    /* The port's options screen reopening itself (bbport_native_settings.cpp). */
+    const int menu=bbgpu_native_menu_press();
+    if (menu) d->buttons=(d->buttons & ~(uint32_t)(BTN_CIRCLE|BTN_CROSS)) | (menu==1 ? BTN_CIRCLE : BTN_CROSS);
 }
 
 static ABI int32_t pad_init(void) { host_lock(&lock); initialized=1; host_unlock(&lock); return 0; }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
+#include <vk_mem_alloc.h>
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -29,6 +30,9 @@ SceneTargets::SceneTargets(const Instance& i, Scheduler& s, Runtime& r, Lookup g
 SceneTargets::~SceneTargets() {
     scheduler.Finish();
     runtime.scene_targets = nullptr;
+}
+SceneTargets::Backing::~Backing() {
+    vmaFreeMemory(allocator, allocation);
 }
 vk::FormatFeatureFlags SceneTargets::Features(vk::Format format) const {
     // Called for every attachment of every draw: the driver query was ~5% of the GPU thread.
@@ -105,8 +109,18 @@ SceneResolution::Size SceneTargets::ProxySize(const VideoCore::Image& image, u32
 bool SceneTargets::SetSize(SceneResolution::Size next) {
     if (next == size) return false;
     ResolveAll();
-    scheduler.Finish();
-    entries.clear(); // no command buffer can still reference these images/views
+    // The old proxies are freed once the GPU has finished this frame's work, without waiting
+    // for it here (a 20-40 ms stall per dynamic resolution step).
+    std::vector<std::unique_ptr<Entry>> retired;
+    // Memory of proxies used at this size stays for the next; the rest goes with its images.
+    std::erase_if(backings, [&](const auto& b) { return !entries.contains(b.first); });
+    for (auto& [key, entry] : entries) {
+        (entry->kept ? parked : retired).push_back(std::move(entry));
+    }
+    entries.clear();
+    if (!retired.empty()) {
+        scheduler.DeferOperation([old = std::move(retired)]() mutable { old.clear(); });
+    }
     tracked.clear();
     ++generation;
     recent = {};
@@ -403,18 +417,70 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level, bool fi
     }
     auto& entry = entries[key];
     original.scene_proxy = true;
+    const auto proxy = ProxySize(original, level);
+    const auto format = original.backing->image.image_ci.format;
+    const auto parked_entry = std::ranges::find_if(parked, [&](const auto& p) {
+        return p->uid == original.image_uid && p->level == level &&
+               p->image.image_ci.extent.width == proxy.width &&
+               p->image.image_ci.extent.height == proxy.height &&
+               p->image.image_ci.format == format;
+    });
+    if (!entry && parked_entry != parked.end()) {
+        // Same images and views as before: no new handles for NGX. The content is stale.
+        entry = std::move(*parked_entry);
+        parked.erase(parked_entry);
+        entry->source = id;
+        entry->layout = vk::ImageLayout::eUndefined;
+        entry->state = {};
+        tracked.insert(original.image_uid);
+    }
     if (!entry) {
         entry = std::make_unique<Entry>();
         entry->source = id;
         entry->uid = original.image_uid;
         entry->level = level;
-        entry->image = VideoCore::UniqueImage(instance.GetDevice(), instance.GetAllocator());
+        const auto device = instance.GetDevice();
+        const auto allocator = instance.GetAllocator();
+        entry->image = VideoCore::UniqueImage(device, allocator);
         auto ci = original.backing->image.image_ci;
         ci.pNext = nullptr;
-        const auto proxy = ProxySize(original, level);
         ci.extent = vk::Extent3D{proxy.width, proxy.height, 1};
         ci.mipLevels = 1;
-        entry->image.Create(ci);
+        const vk::Image image = Check(device.createImage(ci));
+        const auto needed = device.getImageMemoryRequirements(image);
+        auto& backing = backings[key];
+        if (!backing || backing->size < needed.size ||
+            !(needed.memoryTypeBits >> backing->memory_type & 1)) {
+            // 20% headroom (at most the largest size it gets): a step or two up fits too.
+            const u32 grown_w = std::min(std::max(size.width, max_size.width), size.width * 6 / 5);
+            const u32 grown_h = std::min(std::max(size.height, max_size.height),
+                                         size.height * 6 / 5);
+            const u32 div = std::max(1u, SizeDivisor(original.info, size));
+            auto max_ci = ci;
+            max_ci.extent = vk::Extent3D{std::max(proxy.width, grown_w / div >> level),
+                                         std::max(proxy.height, grown_h / div >> level), 1};
+            const vk::Image probe = Check(device.createImage(max_ci));
+            const VkMemoryRequirements req = device.getImageMemoryRequirements(probe);
+            // (VMA's AUTO usages need the create info; this is device-local memory.)
+            const VmaAllocationCreateInfo alloc_ci{
+                .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
+                .usage = VMA_MEMORY_USAGE_UNKNOWN,
+                .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT};
+            VmaAllocation allocation{};
+            VmaAllocationInfo info{};
+            const VkResult result =
+                vmaAllocateMemoryForImage(allocator, probe, &alloc_ci, &allocation, &info);
+            device.destroyImage(probe);
+            ASSERT_MSG(result == VK_SUCCESS, "Scene proxy memory: {}",
+                       vk::to_string(vk::Result{result}));
+            // (Not copied: a copy would free the memory twice.)
+            backing.reset(new Backing{allocator, allocation, req.size, info.memoryType});
+        }
+        vmaBindImageMemory(allocator, backing->allocation, image);
+        entry->memory = backing;
+        // The image alone belongs to the entry (vmaDestroyImage with no allocation).
+        entry->image.image = image;
+        entry->image.image_ci = ci;
         tracked.insert(original.image_uid);
     }
     recent[recent_next++ % recent.size()] = {key, entry.get()};
@@ -560,9 +626,11 @@ std::optional<SceneTargets::Target> SceneTargets::SampleProxy(
 }
 SceneTargets::Target SceneTargets::Read(VideoCore::ImageId id,
                                        const VideoCore::ImageViewInfo& info,
-                                       vk::PipelineStageFlags2 stages, vk::AccessFlags2 access) {
+                                       vk::PipelineStageFlags2 stages, vk::AccessFlags2 access,
+                                       bool ngx) {
     auto& original = *lookup(id, 0);
     auto& e = Get(id);
+    e.kept |= ngx;
     Transition(e, original.aspect_mask, vk::ImageLayout::eGeneral, stages, access);
     return {e.image, View(e, original, info), e.layout, e.image.image_ci.usage};
 }

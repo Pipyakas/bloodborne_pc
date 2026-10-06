@@ -17,11 +17,10 @@ inline Size ForPreset(int preset, Size output = {}) {
     return {uint32_t(std::max(1l, std::lround(output.width / scale / 2)) * 2),
             uint32_t(std::max(1l, std::lround(output.height / scale / 2)) * 2)};
 }
-inline Size ForPercent(float percent, Size output = {}) {
-    // Keep both dimensions even for the half-resolution post-processing targets.
-    const double scale = std::clamp(double(percent), 1.0, 100.0) / 100.0;
-    return {uint32_t(std::max(1l, std::lround(output.width * scale / 2)) * 2),
-            uint32_t(std::max(1l, std::lround(output.height * scale / 2)) * 2)};
+/// `percent` of the output (render_scale, dynamic resolution); even dimensions.
+inline Size ForScale(int percent, Size output = {}) {
+    return {uint32_t(std::max(1l, std::lround(output.width * percent / 200.0)) * 2),
+            uint32_t(std::max(1l, std::lround(output.height * percent / 200.0)) * 2)};
 }
 constexpr uint32_t Pack(Size size) { return size.width | (size.height << 16); }
 constexpr Size Unpack(uint32_t packed) {

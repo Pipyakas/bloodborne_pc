@@ -35,6 +35,9 @@ public:
         vk::CommandBuffer cmdbuf;
         Image color, depth, motion, output;
         u32 render_width, render_height;
+        /// The largest render size of this configuration (dynamic resolution renders less);
+        /// 0: render_width x render_height. DLSS creates its feature at it.
+        u32 max_render_width = 0, max_render_height = 0;
         int preset; ///< BbSettings::Preset
         std::array<float, 2> jitter;
         float frame_ms, near_plane, far_plane, vertical_fov;

@@ -145,6 +145,8 @@ private:
     void PrepareUiDepth(VideoCore::ImageId depth);
     /// Render size below the scaled-preset output size (the resolution patch is on).
     [[nodiscard]] bool Scaled() const;
+    /// DLSS records this frame: its input proxies must outlive resizes (SceneTargets::parked).
+    [[nodiscard]] bool UsesNgx() const;
     /// A target of the patched render size: the game allocates it with aligned dimensions
     /// (a 1916x1078 scene in 1916x1080 targets).
     [[nodiscard]] bool RenderTarget(u32 w, u32 h) const {
@@ -185,9 +187,32 @@ private:
     CameraMotion& camera_motion;
     SceneTargets& scene_targets;
     int applied_preset = -1;
-    float applied_render_percent = -1.0f;
     int applied_upscaler = -1;
     bool dispatched_last_frame = false;
+    u32 context_width = 0, context_height = 0; ///< the FSR 3 context's largest render size
+    /// Dynamic resolution (BbSettings dynamic_resolution): the render size in percent of the
+    /// output while below the mode's own size (preset or render_scale), else 0. Decided from
+    /// the scheduler's GPU busy time against the frame interval over 0.5 s windows.
+    int UpdateDynamicResolution(int base_percent, int floor_percent);
+    int dynamic_percent = 0;
+    std::chrono::steady_clock::time_point drs_window{}, drs_changed{};
+    u64 drs_busy_ns = 0;
+    u32 drs_frames = 0;
+    u32 drs_reports = 0; ///< windows evaluated (a status line every 5 s)
+    /// The lowest dynamic resolution DLSS accepted: raised when a feature for a smaller
+    /// render size cannot be created (percent of the output).
+    int dlss_floor_percent = 5;
+    bool drs_was_enabled = false;
+    u32 drs_over_budget_windows = 0; ///< reject isolated half-second spikes
+    int drs_lowered_from = 0;    ///< the percent before the last step down, until measured
+    double drs_lowered_gpu_ms = 0.0;
+    int drs_useful_floor = 0;    ///< lowering below stopped paying off (for 30 s)
+    std::chrono::steady_clock::time_point drs_useful_floor_at{};
+    bool drs_raised = false; ///< the last change was a step up
+    int drs_blocked = 0;     ///< a step up that was undone soon after, not retried for 15 s
+    std::chrono::steady_clock::time_point drs_blocked_at{};
+    /// The mode's render size without dynamic resolution (DLSS creates its feature at it).
+    u32 max_render_width = 0, max_render_height = 0;
     bool last_active = false, last_jitter = false;
 
 
@@ -256,6 +281,16 @@ private:
     VideoCore::UniqueImage output_image;
     vk::UniqueImageView motion_view;
     vk::UniqueImageView output_view;
+    /// TAA's result at the render size when it differs from the output (resampled after).
+    VideoCore::UniqueImage taa_scaled_image;
+    vk::UniqueImageView taa_scaled_view;
+    /// Motion and output images of earlier sizes, kept for the session: DLSS (NGX) caches
+    /// image views by handle (see SceneTargets::parked).
+    struct PooledImage {
+        VideoCore::UniqueImage image;
+        vk::UniqueImageView view;
+    };
+    std::vector<PooledImage> image_pool;
     VideoCore::UniqueImage opaque_image;   ///< scene color before the blended draws
     VideoCore::UniqueImage reactive_image; ///< R8 reactive mask
     vk::UniqueImageView opaque_view;

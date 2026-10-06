@@ -74,15 +74,6 @@ class NativeUiTests(unittest.TestCase):
         self.assertIsNone(render_size({'preset': '0'}))
         self.assertIsNone(render_size({'upscaler': 'off', 'preset': '3'}))
 
-    def test_custom_render_percentage(self):
-        self.assertEqual(render_size({'render_percent': '75', 'preset': '3'}), (1440, 810))
-        self.assertEqual(scaled_sizes({'output_res': '2560x1440', 'render_percent': '65'}),
-                         ((1664, 936), (2560, 1440)))
-        self.assertEqual(render_size({'render_percent': '1'}), (960, 540))
-        self.assertIsNone(render_size({'render_percent': '110'}))
-        for upscaler in ('off', 'taa'):
-            self.assertIsNone(render_size({'upscaler': upscaler, 'render_percent': '75'}))
-
     def test_output_other_than_1080p_scales_the_scene(self):
         self.assertIsNone(scaled_sizes({'output_res': '1920x1080', 'preset': '2'}))
         # Steam Deck: below 1080p the scene is still the preset's fraction of the output.

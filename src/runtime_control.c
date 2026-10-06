@@ -11,6 +11,7 @@
  *   wait <frames>                  replies after <frames> more presented frames
  *   screenshot <max_width> <path>  the next presented frame as PNG (0: full size): ok <w> <h>
  *   text <utf8>                    confirms the open text entry (IME dialog) with the text
+ *   set <key> <value>              applies one bbport.ini setting live, like the menus (not saved)
  *   quit                           ends the process */
 #ifdef _WIN32
 #include <winsock2.h>
@@ -107,6 +108,14 @@ static void command(Socket client, char *line) {
         // the guest uses (sceImeDialogInit), so it can be tested without playing to a prompt.
         if (bbgpu_text_input_begin(rest, "Enter a name")) reply(client, "ok");
         else reply(client, "error the text dialog could not open");
+    } else if (!strcmp(name, "set")) {
+        const char *key = word(&rest);
+        if (!*key || !*rest) reply(client, "error set <key> <value>");
+        else {
+            bbgpu_set_setting(key, rest);
+            printf("Runtime: setting %s=%s (control channel)\n", key, rest);
+            reply(client, "ok");
+        }
     } else if (!strcmp(name, "quit")) {
         reply(client, "ok");
         puts("Runtime: quit through the control channel");
