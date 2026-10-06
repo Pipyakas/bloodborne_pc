@@ -532,14 +532,6 @@ static ABI void *list_to_dialog(void *out, void *list, void *sprite) {
     return ((ToDialog)(guest + TO_DIALOG))(out, list, sprite);
 }
 
-static ABI void *main_menu_to_dialog(void *out, void *list, void *sprite) {
-    /* The list constructor enables Cancel at +0x9a9; the title main-menu builder
-     * explicitly disables it before making the dialog. Restore the native Cancel
-     * path here, without changing nested options/Load Game dialogs. */
-    ((unsigned char *)list)[0x9a9] = 1;
-    return list_to_dialog(out, list, sprite);
-}
-
 /* The main menu's fifth row: Quit Game instead of the PSN Log In (no PSN here). */
 static ABI void *main_menu_log_in(void *list, void *texts, void *callback, uint64_t flags) {
     (void)texts; (void)callback; (void)flags;
@@ -794,7 +786,7 @@ unsigned runtime_menu_install(unsigned char *image, uint64_t image_size, unsigne
         return 0;
     }
     unsigned hooks = (unsigned)(redirect_call(FIRST_MENU_DIALOG, (const void *)list_to_dialog) +
-                                redirect_call(MAIN_MENU_DIALOG, (const void *)main_menu_to_dialog) +
+                                redirect_call(MAIN_MENU_DIALOG, (const void *)list_to_dialog) +
                                 redirect_call(FIRST_MENU_CALL, (const void *)first_menu));
     for (size_t i = 0; i < sizeof(main_menu_rows) / sizeof(*main_menu_rows); ++i)
         hooks += (unsigned)redirect_call(main_menu_rows[i], (const void *)record_row);

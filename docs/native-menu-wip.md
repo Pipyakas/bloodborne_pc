@@ -1,6 +1,7 @@
 # Native menu changes awaiting runtime validation
 
-These changes are on `native-menu`, not the playable master build.
+Task branches have been consolidated into `master`; this file records unfinished
+requests, not an alternate playable build. Use the normal Start-menu shortcut.
 
 ## Render-resolution integration
 
@@ -15,10 +16,16 @@ menu/settings model. This merge does not claim that UI request is finished.
 
 ## Offline main-menu Back
 
-The candidate restores the native main-menu list's Cancel flag, which the original
-title builder disables. It only changes that list, not nested settings dialogs or
-the initial Online/Offline list. Syntax checking passes, but the resulting native
-transition must be verified in a game run before this can be called a working
-Circle/Esc Back action. It does not implement online services.
+The `cf2f216` candidate restored a flag the title builder disables, but testing
+the integrated master build showed that Circle still stayed on the offline main
+menu. The ineffective hook has been removed; the historical commit is preserved.
+A working Back transition remains unfinished. It would not implement online services.
 
-Do not merge this Back candidate into playable master without runtime validation.
+## Consolidation verification
+
+CLANG64 master build passed. A minimized, silent run reached the native title/main
+menus at approximately 60 FPS. Circle was tested on the offline main menu; no
+fault occurred, but navigation did not change. The test instance was stopped.
+Testing used isolated configuration and user directories; hashes of the real
+settings/save files were unchanged. Uncommitted decomp-harness backup work and
+FSR profiling edits are preserved outside this consolidation.
