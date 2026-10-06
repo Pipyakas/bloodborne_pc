@@ -2146,7 +2146,7 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     };
     // bbport: with live scaling, clear the reduced proxy the scene passes draw into.
     if (!BbToggle::Disabled(BbToggle::RenderTargetMemcpy) &&
-        scene_targets->ClearProxy(image1_id, clear.color, *range)) {
+        scene_targets->ClearProxy(image1_id, clear.color)) {
         return true;
     }
     runtime.ClearImage(&image1, *range, clear);
