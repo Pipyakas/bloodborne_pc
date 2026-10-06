@@ -35,6 +35,24 @@ model in one gameplay process, including output captures and camera movement.
 `out/taa-launcher-validation.log` checks actual GTK controls and saved settings.
 TAA has not yet been tested on the tester's GTX 1060.
 
+## Native mip accesses preserve unrelated scene proxies (2026-10-06)
+
+`Runtime::Transit` now forwards its subresource range to `SceneTargets::NativeAccess`.
+A native read/write of one bloom mip no longer resolves or invalidates proxies for other
+mips. Whole-image accesses still resolve all dirty levels, and writes to an overlapping
+level still invalidate its proxy. Toggle `1 << 60` restores whole-image handling for A/B.
+
+The Vulkan `scene-resolution-test` checks this with different native/proxy colors and
+readback, along with the existing color/depth/stencil round trips and live size changes.
+It now builds on Windows: the runtime stubs use `jmp_buf` and a 64-bit toggle mask, and
+the test matches the production Vulkan-Hpp dispatcher ABI while keeping test assertions.
+
+This is not a demonstrated fix for the remaining bloom copy-back: the frame trace still
+resolves bloom level 0 before downsampling. A view spanning multiple mip levels cannot
+currently sample the single-level proxy. Also, GPU profiler labels aggregate by attachment
+size/format: two `640x360 R16G16B16A16Sfloat` passes need not be a split bloom pass. The
+trace shows different shaders (`6c2323c2` and `4b766f62`) for those two reduced passes.
+
 ## Live scaling closer to the startup patch (2026-10-06, Windows, RTX 3070 Laptop)
 
 Live scaling cost 15% against the startup patch at 1440p DLSS Performance (54 vs 63 FPS, GPU

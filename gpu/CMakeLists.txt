@@ -227,6 +227,12 @@ target_include_directories(scene-resolution-test PRIVATE shim shadps4 third_part
 # The test's Vulkan-Hpp inline methods have a different set of platform extensions
 # from vk_platform.cpp. Keep them local and use an explicit dispatcher in the test.
 target_compile_options(scene-resolution-test PRIVATE -UNDEBUG -fPIC)
+if(WIN32)
+    # PE static linking does not isolate hidden Vulkan-Hpp inline methods like ELF does.
+    # Match vk_platform.cpp's dispatcher layout for this test's init overloads.
+    target_compile_definitions(scene-resolution-test PRIVATE VK_USE_PLATFORM_WIN32_KHR
+        NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
 set_source_files_properties(../tests/test_scene_resolution.cpp PROPERTIES
     COMPILE_OPTIONS "-fvisibility=hidden;-fvisibility-inlines-hidden")
 target_link_libraries(scene-resolution-test PRIVATE bbgpu)
