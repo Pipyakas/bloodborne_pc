@@ -72,6 +72,28 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.model_lod = std::clamp(i, -2, 2);
     } else if (key == "fullscreen") {
         v.fullscreen = i != 0;
+    } else if (key == "frame_limit") {
+        v.frame_limit = std::clamp(i, 0, 120);
+    } else if (key == "maximized") {
+        v.maximized = i != 0;
+    } else if (key == "background_gamepad") {
+        v.background_gamepad = i != 0;
+    } else if (key == "keyboard_controls") {
+        v.keyboard_controls = i != 0;
+    } else if (key == "overlay_docked") {
+        v.overlay_docked = i != 0;
+    } else if (key == "hide_cursor") {
+        v.hide_cursor = i != 0;
+    } else if (key == "mute") {
+        v.mute = i != 0;
+    } else if (key == "mute_background") {
+        v.mute_background = i != 0;
+    } else if (key == "launch") {
+        for (int l = 0; l < LaunchCount; ++l) {
+            if (value == LaunchName(l)) {
+                v.launch = l;
+            }
+        }
     } else if (key == "live_resolution") {
         v.live_resolution = value == "auto" ? -1 : std::clamp(i, 0, 1);
     } else if (key == "output_res") {
@@ -115,6 +137,7 @@ void Load() {
         std::fclose(file);
         std::printf("Settings: %s\n", Path());
     }
+    v.launch_saved = v.launch.load();
     // Environment overrides (scripts, A/B tests).
     if (const char* env = std::getenv("BB_UPSCALER")) {
         v.upscaler = UpscalerOff;
@@ -127,6 +150,7 @@ void Load() {
         {"BB_REACTIVE", "reactive"},              {"BB_REACTIVE_SCALE", "reactive_scale"},
         {"BB_REACTIVE_THRESHOLD", "reactive_threshold"}, {"BB_REACTIVE_MAX", "reactive_max"},
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
+        {"BB_LAUNCH", "launch"},
         {"BB_DLSS_MODEL", "dlss_model"},            {"BB_FRAME_GEN", "frame_gen"},
     };
     for (const auto& [env, key] : env_keys) {
@@ -193,7 +217,7 @@ void Save() {
         return;
     }
     std::fprintf(file,
-                 "# bbport settings (in-game menu: Insert / L3+R3)\n"
+                 "# bbport settings (in-game menu: F1 / L3+R3)\n"
                  "upscaler=%s\npreset=%d\ndlss_model=%s\nframe_gen=%s\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
                  "reactive=%d\nobject_motion=%d\nreactive_scale=%.2f\nreactive_threshold=%.2f\nreactive_max=%.2f\n"
                  "debug_view=%d\nshow_fps=%d\nfsr4_auto_exposure=%d\nfsr4_invert_jitter=%d\n",
@@ -211,6 +235,13 @@ void Save() {
     }
     std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\nfullscreen=%d\n", v.model_lod.load(),
                  OutputWidths[v.output_res], OutputHeights[v.output_res], int(v.fullscreen.load()));
+    std::fprintf(file,
+                 "maximized=%d\nframe_limit=%d\nbackground_gamepad=%d\nhide_cursor=%d\nmute=%d\nmute_background=%d\n"
+                 "launch=%s\nkeyboard_controls=%d\noverlay_docked=%d\n",
+                 int(v.maximized.load()), v.frame_limit.load(), int(v.background_gamepad.load()),
+                 int(v.hide_cursor.load()), int(v.mute.load()), int(v.mute_background.load()),
+                 LaunchName(v.launch_saved), int(v.keyboard_controls.load()),
+                 int(v.overlay_docked.load()));
     // Read by run.sh at start.
     std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
                                                   : v.live_resolution ? "1" : "0");
@@ -254,6 +285,19 @@ const char* UpscalerName(int upscaler) {
     static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa",
                                                                   "dlss"};
     return names[std::clamp(upscaler, 0, UpscalerCount - 1)];
+}
+
+const char* LaunchName(int launch) {
+    static constexpr const char* names[LaunchCount] = {"title", "offline", "continue", "load",
+                                                       "new_game", "system"};
+    return names[std::clamp(launch, 0, LaunchCount - 1)];
+}
+
+const char* LaunchLabel(int launch) {
+    static constexpr const char* labels[LaunchCount] = {
+        "Title screen", "Play Offline menu", "Continue the last save", "Load Game",
+        "New Game", "System settings"};
+    return labels[std::clamp(launch, 0, LaunchCount - 1)];
 }
 
 } // namespace BbSettings

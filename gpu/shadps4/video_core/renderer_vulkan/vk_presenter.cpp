@@ -521,17 +521,73 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         }
     };
 
-    // Recreate the swapchain if the window was resized.
-    if (window.GetWidth() != swapchain.GetWidth() || window.GetHeight() != swapchain.GetHeight()) {
+    // A minimized window has no usable presentation surface, but agents still need
+    // rendered frames and screenshots. Submit the frame's capture and completion fence
+    // without acquiring or presenting a window image. Keep its normal render size.
+    const auto present_offscreen = [&] {
+        const auto reset_result = instance.GetDevice().resetFences(frame->present_done);
+        ASSERT_MSG(reset_result == vk::Result::eSuccess,
+                   "Unexpected error resetting present done fence: {}", vk::to_string(reset_result));
+        auto& scheduler = present_scheduler;
+        const auto cmdbuf = scheduler.CommandBuffer();
+        vk::ImageMemoryBarrier barrier{
+            .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+            .dstAccessMask = vk::AccessFlagBits::eTransferRead,
+            .oldLayout = vk::ImageLayout::eGeneral,
+            .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = frame->image,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+                               vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, barrier);
+        BbCapture::Record(instance, scheduler, cmdbuf, frame->image, swapchain.GetSurfaceFormat().format,
+                          frame->width, frame->height);
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+        barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+        barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+        barrier.newLayout = vk::ImageLayout::eGeneral;
+        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                               vk::PipelineStageFlagBits::eAllCommands, {}, {}, {}, barrier);
+        SubmitInfo info{};
+        info.AddWait(frame->ready_semaphore, frame->ready_tick);
+        info.AddSignal(frame->present_done);
+        scheduler.Flush(info);
+        FrameGen::DropInputs(frame->fg_inputs); // frame generation never sees this frame
+        frame->fg_inputs = -1;
+        free_frame();
+        BbCapture::Presented();
+        if (!is_reusing_frame && is_game_frame) {
+            DebugState.IncFlipFrameNum();
+        }
+    };
+    if (window.IsMinimized()) {
+        present_offscreen();
+        return;
+    }
+
+    // bbport: recreating the swapchain waits for the device to go idle, and vkDeviceWaitIdle
+    // needs every queue externally synchronised: hold the submit lock so the GPU thread cannot
+    // submit meanwhile (racing it lost the device when the window was maximised on Windows).
+    const auto recreate_swapchain = [&] {
+        std::scoped_lock submit_lock{Scheduler::submit_mutex};
         swapchain.Recreate(window.GetWidth(), window.GetHeight());
+    };
+
+    // Recreate the swapchain if the window was resized or was created minimized (frame
+    // generation presents through DXGI: no Vulkan swapchain handle).
+    if ((!swapchain.GetHandle() && !swapchain.UsesDxgi()) || window.GetWidth() != swapchain.GetWidth() ||
+        window.GetHeight() != swapchain.GetHeight()) {
+        recreate_swapchain();
     }
 
     if (!swapchain.AcquireNextImage()) {
-        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+        recreate_swapchain();
         if (!swapchain.AcquireNextImage()) {
             // User resizes the window too fast and GPU can't keep up. Skip this frame.
             LOG_WARNING(Render_Vulkan, "Skipping frame!");
-            free_frame();
+            present_offscreen();
             return;
         }
     }

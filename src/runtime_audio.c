@@ -8,6 +8,7 @@
  * ports only follow the clock. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "gpu/bbgpu.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,9 +54,9 @@ static uint64_t now_ns(void) { return host_monotonic_ns(); }
 static void sleep_until(uint64_t deadline) { host_sleep_until_ns(deadline); }
 static int sdl_audio(void) {
     if (sdl_ready<0) {
-        /* BB_HIDDEN=1 (background runs for agents) is silent unless BB_AUDIO asks for sound. */
-        const char *mode=getenv("BB_AUDIO"), *hidden=getenv("BB_HIDDEN");
-        if (!mode && hidden && hidden[0]=='1') mode="none";
+        /* Background runs for agents are silent unless BB_AUDIO asks for sound. */
+        const char *mode=getenv("BB_AUDIO"), *hidden=getenv("BB_HIDDEN"), *minimized=getenv("BB_MINIMIZED");
+        if (!mode && ((hidden && hidden[0]=='1') || (minimized && minimized[0]=='1'))) mode="none";
         sdl_ready = (!mode || strcmp(mode,"none")) && SDL_InitSubSystem(SDL_INIT_AUDIO);
         printf("Runtime: audio backend %s\n", sdl_ready ? SDL_GetCurrentAudioDriver() : "timer (silent)");
     }
@@ -154,10 +155,12 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
         /* Apply per-channel volume and map PS4 8ch (L R C LFE SL SR BL BR) to SDL 7.1 order. */
         unsigned char converted[2048*8*4];
         static const int remap[8]={0,1,2,3,6,7,4,5};
+        /* bbport.ini mute / mute_background: the port keeps its pace, only silent. */
+        const float master=bbgpu_audio_muted() ? 0.0f : 1.0f;
         for (size_t f=0;f<(size_t)p->frames;++f) for (int c=0;c<p->channels;++c) {
             int target=p->channels==8 && !p->std_layout ? remap[c] : c;
             size_t from=f*(size_t)p->channels+(size_t)c, to=f*(size_t)p->channels+(size_t)target;
-            float gain=(float)p->volume[c]/VOLUME_0DB;
+            float gain=master*(float)p->volume[c]/VOLUME_0DB;
             if (p->is_float) { float v; memcpy(&v,(const char *)data+from*4,4); v*=gain; memcpy(converted+to*4,&v,4); }
             else { int16_t v; memcpy(&v,(const char *)data+from*2,2); v=(int16_t)((float)v*gain); memcpy(converted+to*2,&v,2); }
         }

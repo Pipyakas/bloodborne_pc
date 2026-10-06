@@ -46,7 +46,7 @@ Mesa/RADV) has been tested thoroughly.
   and draws are bound and recorded on another (two-stage pipeline), with a Vulkan recording
   thread and helper threads for memory copies. Early on the single GPU thread capped the game
   at ~26 FPS; now it runs at 90–150 FPS depending on resolution and scene.
-- **In-game menu** (Insert or L3+R3): upscaler, preset, sharpness, output resolution, game
+- **In-game menu** (F1 or L3+R3): upscaler, preset, sharpness, output resolution, game
   effects (chromatic aberration, DoF, motion blur, SSAO, the game's own AA, SSR, model LOD).
 - **GTK4 launcher** and an **AppImage** for the Steam Deck.
 
@@ -129,9 +129,9 @@ and conflicts with *Enemy Control*.
 For the game debug menu, install `DbgFont14h.ccm` and `DbgFont14h.tpf` from
 [Debug Menu and XML Patch](https://www.nexusmods.com/bloodborne/mods/253) into the game's
 `dvdroot_ps4/font/` first. Startup rejects missing or empty font files instead of launching
-the unsafe patch. Open it with the left touchpad / Tab; Backspace is the right touchpad.
+the unsafe patch. Open it with the left touchpad / G; Backspace is the right touchpad.
 Touch coordinates are forwarded from SDL gamepads; Back/Select emulates a left click on
-pads without a touch surface. The port's settings menu remains Insert / L3+R3.
+pads without a touch surface. The port's settings menu is F1 / L3+R3.
 
 GPU occlusion queries still use synthetic pixel counters (`PixelPipeStatDump`), and
 `IT_SET_PREDICATION` is unimplemented. Free camera allows visual investigation; it does
@@ -195,18 +195,25 @@ pass), `BB_FSR4_PROFILE=1` (GPU time per FSR 4 pass), `BB_UPSCALER=taa|fsr3|fsr4
 `BB_PAD_RECORD=file` / `BB_PAD_REPLAY=file` (record a route with F9, replay it in scripted tests),
 `BB_GC_BUDGET_MB=N` (texture cache budget, as on integrated GPUs), `BB_PRESENT_DUMP_TRIGGER=file`
 with `BB_PRESENT_DUMP_COUNT=N` (dump N consecutive presented frames), `BB_HIDDEN=1` (the window
-is never shown and the host keyboard and gamepads are ignored), `BB_CONTROL=port` (a line protocol
+is never shown and the host keyboard and gamepads are ignored), `BB_MINIMIZED=1` (create a minimized
+taskbar window without taking focus, ignoring fullscreen settings and host input; silent unless
+`BB_AUDIO` is set; `BB_HIDDEN=1` takes precedence), `BB_CONTROL=port` (a line protocol
 on 127.0.0.1 for pad input, frame waits and PNG screenshots; 0 picks a free port; commands in
 `src/runtime_control.c`).
 
 **Agents (MCP):** `tools/mcp/bbport_mcp.py` (registered in `.mcp.json`, Python standard library
-only) starts the game in the background with `BB_HIDDEN=1`, `BB_AUDIO=none`, no console and a
+only) starts the game in the background with `BB_MINIMIZED=1`, `BB_AUDIO=none`, no console and a
 60 FPS limit, and gives agents `game_launch`, `game_screenshot`, `game_press`, `game_hold`,
 `game_release`, `game_wait`, `game_log`, `game_text`, `game_commands`, `game_status` and
 `game_stop`. Screenshots are read back from the presenter, so the desktop and its focus stay
 untouched; the log is `out/mcp/game.log`. The same tools run from a shell, one call each, the
 game running in between: `python tools/mcp/bbport_mcp.py launch`, `... press tokens=cross`,
 `... screenshot` (prints the PNG's path), `... stop`, `... help`.
+Launches default to a minimized taskbar window, so running instances stay visible in the taskbar.
+You can restore it manually; agent input still uses the control channel and host input stays disabled.
+Use `game_launch(hidden=true)` or `python tools/mcp/bbport_mcp.py launch hidden=true` to hide it
+completely. Use `minimized=false` (with `hidden=false`) for a normal foreground window. Minimized
+launches do not provide foreground focus for features that require it (such as DLSS Frame Generation).
 More in [docs/](docs); recent changes: [docs/CHANGES_2026-10-02.md](docs/CHANGES_2026-10-02.md),
 [docs/CHANGES_2026-10-03.md](docs/CHANGES_2026-10-03.md).
 
@@ -244,7 +251,7 @@ Windows: `setup.bat` compiles `tools\setup\BbportSetup.cs` with the C# compiler 
    The first start builds the port (a few minutes; `build.sh` in the CLANG64 environment) into
    `out\bb-probe.exe`. The game folder is remembered: afterwards `run.bat` alone starts the game.
    `BB_PREBUILT=1` skips the build check. Settings, saves, mods and patches use the same files as
-   on Linux (`bbport.ini`, `user\`, `mods\`, `patches\`); the in-game menu (Insert or L3+R3)
+   on Linux (`bbport.ini`, `user\`, `mods\`, `patches\`); the in-game menu (F1 or L3+R3)
    changes the settings. `fullscreen=1` in `bbport.ini` (or F11 in the game) gives a
    borderless window at the desktop size; with `output_res=3840x2160` and `preset=1` (FSR 3.1
    Quality, scene 2560x1440) the RTX 4090 above stays at the 120 Hz display limit. The GTK

@@ -646,10 +646,18 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--user") && i+1<argc) user_dir=argv[++i];
         else if (!strcmp(argv[i], "--patches") && i+1<argc) patch_file=argv[++i];
         else if (!strcmp(argv[i], "--timeout") && i+1<argc) timeout_seconds=(unsigned)strtoul(argv[++i],NULL,10);
+        /* Launch shortcut for this start (bbport.ini "launch"; read by the GPU library). */
+        else if (!strcmp(argv[i], "--launch") && i+1<argc) {
+#ifdef _WIN32
+            _putenv_s("BB_LAUNCH", argv[++i]);
+#else
+            setenv("BB_LAUNCH", argv[++i], 1);
+#endif
+        }
         else { fprintf(stderr, "Unknown option: %s\n", argv[i]); return 1; }
     }
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s boot.bin [--cpu-only] [--strict-imports] [--content-profile file] [--app0 dir] [--user dir] [--patches file] [--timeout seconds] | --vulkan-only\n", argv[0]);
+        fprintf(stderr, "Usage: %s boot.bin [--cpu-only] [--strict-imports] [--content-profile file] [--app0 dir] [--user dir] [--patches file] [--timeout seconds] [--launch title|offline|continue|load|new_game|system] | --vulkan-only\n", argv[0]);
         return 1;
     }
     if (content_profile) {
@@ -667,6 +675,7 @@ int main(int argc, char **argv) {
     }
     if (app0) {
         runtime_file_configure(app0, user_dir ? user_dir : "user");
+        if (!cpu_only) runtime_menu_files(user_dir ? user_dir : "user");
         char sfo[4096], id[16]="";
         snprintf(sfo,sizeof(sfo),"%s/sce_sys/param.sfo",app0);
         if (sfo_value(sfo,"INSTALL_DIR_SAVEDATA",id,sizeof(id),NULL) || sfo_value(sfo,"TITLE_ID",id,sizeof(id),NULL))
@@ -840,6 +849,16 @@ int main(int argc, char **argv) {
         memcpy(image + relocs[i].target, &value, 8);
     }
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
+    unsigned char *menu_stubs = cpu_only ? NULL : allocate(page_size);
+    if (menu_stubs) {
+        printf("Native menu hooks: %u\n", runtime_menu_install(image, size, menu_stubs));
+        protect(menu_stubs, page_size, 5);
+    }
+    unsigned char *effect_stubs = cpu_only ? NULL : allocate(page_size);
+    if (effect_stubs) {
+        printf("Live effect hooks: %u\n", runtime_effects_install(image, size, effect_stubs));
+        protect(effect_stubs, page_size, 5);
+    }
 #ifdef _WIN32
     printf("Guest thread pointer reads: %" PRIu64 " use TEB TLS slot %u\n", patch_tls_reads(segments, ns), runtime_win_tls_slot());
 #endif

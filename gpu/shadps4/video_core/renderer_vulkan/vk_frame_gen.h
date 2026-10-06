@@ -69,6 +69,9 @@ bool Present(u32 index, int inputs);
 void RecordInputs(vk::CommandBuffer cmdbuf, const Inputs& inputs);
 /// Presenter, GPU thread at the flip: the input set recorded for this frame, or -1.
 int TakeInputs();
+/// Presenter: a frame taken with `inputs` is not presented (minimised window, skipped
+/// frame); its input set may be recorded again at once.
+void DropInputs(int inputs);
 
 } // namespace FrameGen
 } // namespace Vulkan

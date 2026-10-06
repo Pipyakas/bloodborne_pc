@@ -587,9 +587,9 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
     // bbport: frame limit (see EmulatorSettings::GetFrameLimit). A request waits in the queue
     // until its slot; slots advance by one period (no drift) but never lag behind by more.
-    const u32 frame_limit = EmulatorSettings.GetFrameLimit();
-    const auto frame_period = frame_limit ? std::chrono::nanoseconds(1000000000 / frame_limit)
-                                          : std::chrono::nanoseconds(0);
+    u32 frame_limit = EmulatorSettings.GetFrameLimit();
+    auto frame_period = frame_limit ? std::chrono::nanoseconds(1000000000 / frame_limit)
+                                    : std::chrono::nanoseconds(0);
     auto next_flip = std::chrono::steady_clock::now();
     std::printf("VideoOut: vblank %u Hz, frame limit %u FPS\n",
                 EmulatorSettings.GetVblankFrequency(), frame_limit);
@@ -611,6 +611,13 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     while (!token.stop_requested()) {
         timer.Start();
         const auto tick_deadline = std::chrono::steady_clock::now() + vblank_period;
+        // bbport: the limit follows the options screen (frame_limit) while the game runs.
+        if (const u32 limit = immediate_flips ? EmulatorSettings.GetFrameLimit() : 0;
+            limit && limit != frame_limit) {
+            frame_limit = limit;
+            frame_period = std::chrono::nanoseconds(1000000000 / frame_limit);
+            std::printf("VideoOut: frame limit %u FPS\n", frame_limit);
+        }
 
         if (DebugState.IsGuestThreadsPaused()) {
             DrawLastFrame();
