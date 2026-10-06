@@ -2,6 +2,7 @@
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "video_core/renderer_vulkan/motion_history.h"
+#include "video_core/renderer_vulkan/dynamic_resolution.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
 #include "video_core/renderer_vulkan/ui_composition.h"
 
@@ -352,7 +353,9 @@ bool TemporalUpscaler::OnFrameStart() {
     // A dynamic resolution step keeps the upscalers' history (output size), not TAA's.
     if (changed || (resized && upscaler == BbSettings::UpscalerTaa) || !dispatched_last_frame)
         reset = true;
-    if (changed || resized) jitter_index = 0;
+    // A DRS resize keeps temporal reconstruction history; keep its sample
+    // sequence too. Restarting Halton on each adjustment makes edges shimmer.
+    if (changed) jitter_index = 0;
     applied_preset = preset;
     applied_output = output;
     applied_upscaler = upscaler;
@@ -393,8 +396,36 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
     drs_busy_ns += scheduler.TakeGpuBusyNs();
     ++drs_frames;
     const bool enabled = settings.dynamic_resolution && !scaled_session;
+    if (enabled && !drs_was_enabled) {
+        const int seed = applied_upscaler < 0
+                             ? (Active() && settings.upscaler != BbSettings::UpscalerTaa
+                                    ? int(100.0f / BbSettings::PresetScale(settings.preset))
+                                    : settings.render_scale.load())
+                             : DynamicResolution::Seed(scene_targets.Size().width, target_width,
+                                                       floor_percent, base_percent);
+        const int initial = std::clamp(seed, std::min(floor_percent, base_percent), base_percent);
+        dynamic_percent = initial < base_percent ? initial : 0;
+        drs_changed = now;
+        drs_lowered_from = drs_useful_floor = drs_blocked = 0;
+        drs_over_budget_windows = 0;
+        drs_window = now;
+        drs_busy_ns = 0;
+        drs_frames = 0;
+        std::printf("Dynamic resolution: starts at %d%% (current render size)\n", initial);
+    }
+    drs_was_enabled = enabled;
     if (!enabled) {
         dynamic_percent = 0;
+    }
+    // Menu/loading timings say nothing about the next scene's render cost.
+    // Discard that window rather than climbing to native and dropping on return.
+    if (enabled && !camera_motion.LastFrameHadCamera()) {
+        drs_window = now;
+        drs_busy_ns = 0;
+        drs_frames = 0;
+        drs_over_budget_windows = 0;
+        settings.dynamic_percent = dynamic_percent ? dynamic_percent : base_percent;
+        return dynamic_percent;
     }
     if (drs_window == steady_clock::time_point{}) drs_window = now;
     const double window_ms = duration<double, std::milli>(now - drs_window).count();
@@ -413,9 +444,10 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
         settings.dynamic_percent = 0;
         return 0;
     }
-    if (drs_settle) {
-        // The window after a change holds its resize pause: not a measurement.
-        drs_settle = false;
+    // No completed GPU queries is not unlimited headroom. In particular, do
+    // not convert an infinite fitted scale to int on startup/unsupported timers.
+    if (!(gpu_ms > 0.0) || !std::isfinite(gpu_ms) || !std::isfinite(frame_ms)) {
+        drs_over_budget_windows = 0;
         return dynamic_percent;
     }
     const u32 limit = EmulatorSettings.GetFrameLimit();
@@ -450,21 +482,17 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
     // it (no headroom for heavier scenes). When the CPU limits the frame rate, the GPU is idle
     // part of each frame and nothing is lowered.
     const bool gpu_bound = gpu_ms > frame_ms * 0.9;
+    const bool over_budget = gpu_bound &&
+                            (frame_ms > target_ms * 1.05 || gpu_ms > target_ms * 0.95);
+    drs_over_budget_windows = over_budget ? std::min(drs_over_budget_windows + 1, 2u) : 0;
     if (next != current) {
         // reverting a step that did not pay off
-    } else if (gpu_bound && (frame_ms > target_ms * 1.05 || gpu_ms > target_ms * 0.95) &&
-               since_change >= 1.0 && current > floor) {
-        // GPU time grows with the pixel count (percent squared) plus fixed costs: aim at 85%
-        // of the target, in steps of 1%, at most 10 per step (20 when far over) so the change
-        // in sharpness stays gradual.
+    } else if (over_budget && (drs_over_budget_windows >= 2 || gpu_ms > target_ms * 1.5) &&
+               since_change >= 0.5 && current > floor) {
+        // GPU time grows with pixel count plus fixed costs. Fit an 85% budget
+        // target, then slew-limit the actual transition below (never jump to it).
         const double fit = current * std::sqrt(0.85 * target_ms / gpu_ms);
-        const int largest_step = gpu_ms > target_ms * 1.5 ? 20 : 10;
-        next = std::clamp(int(fit), std::max(floor, current - largest_step),
-                          std::max(floor, current - 1));
-        if (next < current) {
-            drs_lowered_from = current;
-            drs_lowered_gpu_ms = gpu_ms;
-        }
+        next = std::clamp(int(fit), floor, std::max(floor, current - 1));
         // A step up undone within 3 s is not retried for 15 s (no oscillation).
         if (drs_raised && since_change < 3.0) {
             drs_blocked = current;
@@ -472,8 +500,8 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
         }
     } else if (current < base_percent && since_change >= 2.0 &&
                gpu_ms < 0.8 * std::max(target_ms, frame_ms)) {
-        // Headroom against whatever limits the frame (the target, or the CPU): up towards 85%
-        // of it, 1-5% per step; not to a size undone in the last 15 s.
+        // Headroom against whatever limits the frame (the target, or the CPU).
+        // Recovery is slower than lowering and obeys the same one-point limit.
         const double budget = 0.85 * std::max(target_ms, frame_ms);
         int up = std::clamp(int(current * std::sqrt(budget / gpu_ms)), current + 1,
                             std::min(base_percent, current + 5));
@@ -482,13 +510,17 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
         }
         if (up > current) next = up;
     }
+    next = DynamicResolution::Step(current, next, floor, base_percent);
+    if (next < current) {
+        drs_lowered_from = current;
+        drs_lowered_gpu_ms = gpu_ms;
+    }
     if (++drs_reports % 10 == 0 && next == current) {
         std::printf("Dynamic resolution: %d%% (GPU %.1f ms, frame %.1f ms, target %.1f ms)\n",
                     current, gpu_ms, frame_ms, target_ms);
     }
     if (next != current) {
         drs_raised = next > current;
-        drs_settle = true;
         std::printf("Dynamic resolution: %d%% -> %d%% (GPU %.1f ms, frame %.1f ms, target "
                     "%.1f ms)\n",
                     current, next, gpu_ms, frame_ms, target_ms);

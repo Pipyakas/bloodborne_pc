@@ -299,7 +299,8 @@ RTX 20/30 the transformer models are noticeably heavier than on RTX 40/50.
 the output and scales it to the output under full-resolution HUD; above 100 it supersamples.
 `dynamic_resolution=1` (menu: *Dynamic*, the last entry of *Upscaling quality* or *Render
 resolution*) replaces the preset: it lowers the render
-resolution (in steps of 1% or more; the manual `render_scale` uses 5%) while the GPU misses the frame rate limit (or is within 5% of it), until the
+resolution (at most one percentage point per half-second measurement; the manual `render_scale`
+uses 5%) while the GPU misses the frame rate limit (or is within 5% of it), until the
 CPU limits the frame rate or a step no longer saves GPU time (under a tenth of what its pixel count
 predicts: the remaining work is the upscaler and HUD at output size, shadows), and raises it again
 while the GPU has headroom, up to 100% of the output (a `render_scale` above 100: that).
@@ -307,6 +308,12 @@ It measures the GPU's busy time per frame (a timestamp at the start and end of e
 buffer) against the frame interval: when the CPU limits the frame rate the GPU idles part of each
 frame and the resolution is not lowered. DLSS keeps one feature per quality mode across the
 sizes its range accepts (50-100% of the output for Quality, Balanced and Performance).
+DRS starts from the current fixed render size rather than jumping to native. Isolated timing
+spikes are ignored (sustained severe overload can react immediately); quality recovery is slower
+than lowering. Menu/loading frames do not raise or lower the scene resolution. Ordinary DRS
+changes preserve the jitter sequence and retain upscaler history where the provider supports
+dynamic render sizes; TAA still resets its render-sized history when resized. Smoother transitions
+trade some convergence speed for less visible popping.
 
 **Frame generation (DLSS-G, Windows):** `frame_gen=2x|3x|4x|dynamic` (menu: *Frame generation*;
 switching it on or off needs a restart, the multiplier changes live) presents through a D3D12/DXGI
