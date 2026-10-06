@@ -70,7 +70,8 @@ public:
     bool CopyProxy(VideoCore::ImageId src, VideoCore::ImageId dst);
     /// bbport: clears the reduced proxy of a color scene target instead of the native image
     /// (a guest compute clear): no resolve before the clear, no fill after it.
-    bool ClearProxy(VideoCore::ImageId id, const vk::ClearColorValue& value);
+    bool ClearProxy(VideoCore::ImageId id, const vk::ClearColorValue& value,
+                    const VideoCore::SubresourceRange& range);
     bool debug = false; ///< BB_SCENE_DEBUG frame: print resolves and fills
 private:
     struct Entry {

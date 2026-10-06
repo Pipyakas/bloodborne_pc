@@ -414,24 +414,26 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level, bool fi
     if (fill && !entry->state.valid) Copy(*entry, original, false);
     return *entry;
 }
-bool SceneTargets::ClearProxy(VideoCore::ImageId id, const vk::ClearColorValue& value) {
+bool SceneTargets::ClearProxy(VideoCore::ImageId id, const vk::ClearColorValue& value,
+                              const VideoCore::SubresourceRange& range) {
     if (!Reduced() || copying) {
         return false;
     }
     auto& image = *lookup(id, 0);
-    if (image.info.resources.levels != 1 || image.info.resources.layers != 1 ||
+    if (range.base.level != 0 || range.base.layer != 0 || range.extent.layers != 1 ||
         image.info.props.is_depth || !Eligible(image)) {
         return false;
     }
-    auto& e = Get(id, 0, false);
-    Transition(e, image.aspect_mask, vk::ImageLayout::eTransferDstOptimal,
-               vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite);
-    const vk::Image proxy = e.image;
-    scheduler.Record([proxy, value](vk::CommandBuffer cmd) {
-        const vk::ImageSubresourceRange range{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-        cmd.clearColorImage(proxy, vk::ImageLayout::eTransferDstOptimal, value, range);
-    });
-    e.state.ProxyWrite();
+    for (u32 level = 0; level < range.extent.levels; ++level) {
+        auto& e = Get(id, level, false);
+        Transition(e, image.aspect_mask, vk::ImageLayout::eTransferDstOptimal,
+                   vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite);
+        scheduler.Record([proxy = vk::Image(e.image), value](vk::CommandBuffer cmd) {
+            const vk::ImageSubresourceRange whole{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+            cmd.clearColorImage(proxy, vk::ImageLayout::eTransferDstOptimal, value, whole);
+        });
+        e.state.ProxyWrite();
+    }
     image.flags |= VideoCore::ImageFlagBits::GpuModified;
     image.flags &= ~VideoCore::ImageFlagBits::Dirty;
     return true;
