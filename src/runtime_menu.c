@@ -314,39 +314,48 @@ typedef void (ABI *AddRowWidget)(void *, void *, void *value, void *, const void
 typedef void (ABI *AddSlider)(void *, void *, void *value, const void *def);
 typedef void (ABI *NewChoices)(void *);
 
-/* The game's row widgets: one array in a child of the screen object, 0xd00 bytes per row,
- * each holding the pointer to its row's value; 8 bytes before it, a byte that reads 1 while
- * the row's dropdown is open. Found by the value pointers (rows[k].value) of the screen's
- * leading choice rows (the screens put their choices first). */
-#define ROW_WIDGET_STRIDE 0xd00
+/* The game's row widgets: 0xd00-byte objects, each holding the pointer to its row's value;
+ * 8 bytes before it, a byte that reads 1 while the row's dropdown is open. The add-row
+ * functions append an entry per row (0x90 bytes, which points to the widget) to a vector in
+ * the screen object; the widget is found from its entry by its value pointer (rows[k].value).
+ * The widgets are allocated one by one, so they are adjacent only by chance. */
+#define SCREEN_ROW_ENTRIES 0xe50   /* {?, begin, end, capacity} */
+#define ROW_ENTRY_SIZE 0x90
+#define ROW_WIDGET_SIZE 0xd00
 #define ROW_DROPDOWN_OPEN (-8)
 
-static void watch_dropdowns(void *screen, const BbNativeSetting *rows, int count) {
-    /* The leading choice rows (the widgets of other kinds have other sizes). */
-    int choices = 0;
-    while (choices < count && rows[choices].kind == BB_NATIVE_CHOICE) ++choices;
-    if (!choices) return;
-    void **words = screen;
-    for (int w = 0; w < 0x400; ++w) {
-        unsigned char *inner = words[w];
-        if ((uintptr_t)inner < 0x10000 || ((uintptr_t)inner & 7) ||
-            !runtime_memory_is_mapped((uintptr_t)inner, (uint64_t)ROW_WIDGET_STRIDE * (uint64_t)choices))
-            continue;
-        for (size_t at = 0; at < ROW_WIDGET_STRIDE; at += 8) {
-            int all = 1;
-            for (int r = 0; r < choices && all; ++r) {
-                void *value;
-                memcpy(&value, inner + at + (size_t)r * ROW_WIDGET_STRIDE, 8);
-                all = value == (void *)rows[r].value;
-            }
-            if (!all) continue;
-            for (int r = 0; r < choices; ++r)
-                bbgpu_native_settings_dropdown(&rows[r], (const volatile uint8_t *)(inner + at +
-                    (size_t)r * ROW_WIDGET_STRIDE + ROW_DROPDOWN_OPEN));
-            return;
+static const unsigned char *find_row_widget(void *screen, int index, const void *value) {
+    unsigned char *const *vector = (unsigned char *const *)((char *)screen + SCREEN_ROW_ENTRIES);
+    unsigned char *begin = vector[1], *end = vector[2];
+    if (!begin || end < begin || (size_t)(end - begin) / ROW_ENTRY_SIZE <= (size_t)index ||
+        !runtime_memory_is_mapped((uintptr_t)begin, (uint64_t)(end - begin)))
+        return NULL;
+    const unsigned char *entry = begin + (size_t)index * ROW_ENTRY_SIZE;
+    for (size_t q = 0; q < ROW_ENTRY_SIZE; q += 8) {
+        unsigned char *widget;
+        memcpy(&widget, entry + q, 8);
+        if ((uintptr_t)widget < 0x10000 || ((uintptr_t)widget & 7) ||
+            !runtime_memory_is_mapped((uintptr_t)widget, ROW_WIDGET_SIZE)) continue;
+        for (size_t at = 8; at < ROW_WIDGET_SIZE; at += 8) {
+            void *found;
+            memcpy(&found, widget + at, 8);
+            if (found == value && widget[at + ROW_DROPDOWN_OPEN] <= 1) return widget + at;
         }
     }
-    puts("Runtime: settings screen: row widgets not found; choices apply when it closes");
+    return NULL;
+}
+
+static void watch_dropdowns(void *screen, const BbNativeSetting *rows, int count) {
+    for (int r = 0; r < count; ++r) {
+        if (rows[r].kind != BB_NATIVE_CHOICE) continue;
+        const unsigned char *widget = find_row_widget(screen, r, rows[r].value);
+        if (widget) {
+            bbgpu_native_settings_dropdown(&rows[r], (const volatile uint8_t *)(widget + ROW_DROPDOWN_OPEN));
+        } else {
+            printf("Runtime: settings screen: row %d's widget not found; its choice applies when the "
+                   "screen closes\n", r);
+        }
+    }
 }
 
 /* One game row per port setting of screen `id`, under our heading. */

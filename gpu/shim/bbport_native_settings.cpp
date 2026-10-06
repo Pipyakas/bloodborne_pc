@@ -91,7 +91,7 @@ int Labels(const char16_t* const (&list)[N], const char16_t* const** out) {
     return int(N);
 }
 
-// Each screen lists its choice rows first (runtime_menu.c finds their dropdowns in order).
+// The rows of each screen, in screen order.
 const Row rows[] = {
     // Screen
     {BB_NATIVE_SCREEN, u"Screen mode", u"Window, maximised window or borderless full screen (F11).",
