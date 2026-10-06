@@ -1,4 +1,16 @@
-THIS PROJECT IS NOT RELATED TO SHADPS4. ALL QUESTIONS RELATED TO THIS PROJECT SHOULD BE SENT TO THE DISCORD SERVER https://discord.gg/KYZRKk9CB, NOT TO THE SHADPS4 SERVER.
+# Pipyakas/bloodborne_pc — Windows-focused fork
+
+**Start here: [Fork aims and release policy](README.fork.md).** Our primary target
+is a downloadable Windows executable release after every successful `master` push.
+Automatic GitHub binary releases are not implemented yet; a source push alone is
+not a binary release. Report fork-specific issues in
+[this repository](https://github.com/Pipyakas/bloodborne_pc/issues).
+
+The technical background below is inherited from upstream and extended with this
+fork's changes. Linux performance/validation claims do not establish Windows results.
+
+**Upstream support note:** upstream requests that its questions go to
+https://discord.gg/KYZRKk9CB, not to shadPS4's server. This fork is independently maintained.
 
 
 # bbport — a native Linux port of Bloodborne
