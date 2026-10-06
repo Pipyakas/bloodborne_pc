@@ -8,10 +8,12 @@ It launches `C:\code\bloodborne_pc\Bloodborne.cmd`, which uses the prebuilt
 update that executable.
 
 For completed implementation work, the user authorizes agents to commit their own
-changes, integrate them into local `master`, and rebuild the playable checkout
-without asking again. Do not push unless the user explicitly requests it.
-Explicit task instructions (for example, review only, leave uncommitted, or do not
-merge) override this default.
+changes, integrate them into `master`, rebuild the playable checkout, and push
+the completed work to the user's GitHub fork without asking again. The publishing
+remote is `origin`: `https://github.com/Pipyakas/bloodborne_pc.git`. Verify the
+remote URL before pushing; do not push to `upstream` or another owner's fork.
+Explicit task instructions (for example, review only, leave uncommitted, do not
+merge, or do not push) override this default.
 
 During development, the user authorizes agents to close the running playable master
 build before rebuilding/updating it, without asking again. Match the executable path
@@ -50,9 +52,26 @@ Before reporting implementation work as finished:
    test instance afterward. Minimized, silent launches are the default; do not
    launch a foreground game, enable sound, or manipulate desktop focus without
    the user's permission. Preserve the user's settings and saves.
-6. Report the integrated `master` commit, build result, relevant test results,
-   and anything deliberately left out. If integration/build/test is blocked,
-   say so explicitly; do not claim the Start menu build has been updated.
+6. Publish tested, integrated work with a normal, non-force push to
+   `origin/master`. Fetch/check the current remote first; if it advanced,
+   reconcile safely and rerun relevant tests/builds. Never force-push or rewrite
+   published history. Verify the published commit and provide its GitHub URL.
+   Do not include secrets, game assets, saves, local settings, generated build
+   output, or proprietary DLLs. Publishing source does not mean uploading the
+   local executable as a GitHub release.
+7. Report the integrated/published `master` commit, build result, relevant test
+   results, and anything deliberately left out. If integration/build/test/push
+   is blocked, say so explicitly; do not claim either the Start menu build or
+   GitHub has been updated when it has not.
+
+## Publish unfinished work separately
+
+Do not leave task work local-only: commit coherent task-owned changes and push
+your task branch to the same fork, even when not yet ready for `master`. Clearly
+label incomplete or experimental work as WIP and report limitations and tests
+that failed or have not run. This is not permission to merge unverified work,
+claim it is ready for users, or publish someone else's uncommitted changes.
+If no safe commit can be made, report the blocker instead.
 
 ## Shared-checkout safety
 
