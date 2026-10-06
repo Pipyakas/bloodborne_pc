@@ -168,7 +168,11 @@ void ObjectMotion::EnsureImage(u32 width, u32 height) {
     }
     const auto device = instance.GetDevice();
     if (image) {
-        scheduler.Finish();
+        // Freed once the GPU is done with it: waiting here stalled every dynamic resolution
+        // step (the image follows the render size).
+        scheduler.DeferOperation([old_view = std::move(view), old = std::move(image)]() mutable {
+            old_view.reset();
+        });
     }
     view.reset();
     image_layout = vk::ImageLayout::eUndefined;
