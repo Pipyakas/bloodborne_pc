@@ -81,6 +81,7 @@ enum : std::uint64_t {
     /// when the source buffer runs past the image (depth plus stencil/HTILE planes) or no
     /// destination image exists yet (2026-10-06).
     RenderTargetMemcpy = 1ull << 58,
+    SceneMipChains = 1ull << 59, ///< live scaling reduces level 0 of the bloom pyramid
     // Bits 20-29 are used as raw debug toggles by the camera/object motion and the upscaler.
 };
 inline bool Disabled(std::uint64_t bit) {

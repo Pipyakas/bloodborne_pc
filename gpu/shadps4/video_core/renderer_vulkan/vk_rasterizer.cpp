@@ -2146,7 +2146,7 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     };
     // bbport: with live scaling, clear the reduced proxy the scene passes draw into.
     if (!BbToggle::Disabled(BbToggle::RenderTargetMemcpy) &&
-        scene_targets->ClearProxy(image1_id, clear.color)) {
+        scene_targets->ClearProxy(image1_id, clear.color, *range)) {
         return true;
     }
     runtime.ClearImage(&image1, *range, clear);
@@ -2848,9 +2848,10 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         const auto& [id, desc] = cb_descs[cb];
         if (id) {
             const auto& image = texture_cache.GetImage(id);
-            // Mip levels of eligible chains have their own proxies (SceneTargets::Get).
+            // Only level 0 of an eligible mip chain is drawn reduced (SceneTargets::Eligible).
             if (!scene_targets->Eligible(image) || image.binding.is_bound ||
                 image.binding.needs_rebind || desc.view_info.range.base.layer ||
+                desc.view_info.range.base.level ||
                 !same_size(image, desc.view_info.range.base.level)) reduced = false;
             if (debug_pass) {
                 why += fmt::format(" [{} {}x{} eligible {} bound {} rebind {} level {} layer {}]",
