@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -82,6 +83,39 @@ const char16_t* const FrameGenLabels[] = {u"Off", u"2x", u"3x (multi frame)", u"
                                           u"Dynamic (multi frame)"};
 static_assert(std::size(FrameGenLabels) == BbSettings::FrameGenCount);
 
+// render_scale's choices. The game's lists hold at most 32 entries: 5% .. 100% in steps of 5,
+// then 110% .. 200% in steps of 10 (the F1 menu has every step of 5).
+constexpr int RenderScaleCount = 30;
+constexpr int RenderScaleValue(int i) {
+    return i < 20 ? 5 + i * 5 : 100 + (i - 19) * 10;
+}
+int RenderScaleIndex(int percent) {
+    int best = 0;
+    for (int i = 1; i < RenderScaleCount; ++i) {
+        if (std::abs(RenderScaleValue(i) - percent) < std::abs(RenderScaleValue(best) - percent)) {
+            best = i;
+        }
+    }
+    return best;
+}
+const auto render_scale_text = [] {
+    std::array<std::u16string, RenderScaleCount> text;
+    for (int i = 0; i < RenderScaleCount; ++i) {
+        const std::string percent = std::to_string(RenderScaleValue(i)) + "%";
+        text[i] = std::u16string(percent.begin(), percent.end());
+    }
+    return text;
+}();
+const auto render_scale_labels = [] {
+    std::array<const char16_t*, RenderScaleCount> labels{};
+    for (int i = 0; i < RenderScaleCount; ++i) labels[i] = render_scale_text[i].c_str();
+    return labels;
+}();
+
+bool HasPresets(const Values& v) {
+    return v.upscaler != BbSettings::UpscalerOff && v.upscaler != BbSettings::UpscalerTaa;
+}
+
 // The Upscaler row's default: the entry of the settings' default (DLSS, else FSR 3.1).
 constexpr int UpscalerDefault = -1;
 
@@ -117,6 +151,10 @@ const Row rows[] = {
          v.frame_limit = BbSettings::FrameLimits[std::clamp(i, 0, BbSettings::FrameLimitCount - 1)];
      },
      0, [](const char16_t* const** out) { return Labels(FrameLimitLabels, out); }},
+    {BB_NATIVE_SCREEN, u"Dynamic resolution",
+     u"Lowers the render resolution while the GPU misses the frame rate limit; raises it again with headroom.",
+     Toggle, [](const Values& v) { return v.dynamic_resolution ? 1 : 0; },
+     [](Values& v, int on) { v.dynamic_resolution = on != 0; }, 0},
     {BB_NATIVE_SCREEN, u"Frame rate counter", u"Frame rate and frame time in a corner of the screen.",
      Toggle, [](const Values& v) { return v.show_fps ? 1 : 0; },
      [](Values& v, int on) { v.show_fps = on != 0; }, 0},
@@ -148,7 +186,21 @@ const Row rows[] = {
     {BB_NATIVE_UPSCALING, u"Upscaling quality", u"Render resolution: Native renders at the output resolution.",
      Choice, [](const Values& v) { return v.preset.load(); },
      [](Values& v, int i) { v.preset = std::clamp(i, 0, BbSettings::PresetCount - 1); },
-     BbSettings::Performance, [](const char16_t* const** out) { return Labels(PresetLabels, out); }},
+     BbSettings::Performance, [](const char16_t* const** out) { return Labels(PresetLabels, out); },
+     [](const Values& v) { return HasPresets(v); }},
+    // The screen has five row slots: this row takes the quality row's place with upscaling off
+    // or TAA (which row shows is decided when the screen opens).
+    {BB_NATIVE_UPSCALING, u"Render resolution",
+     u"With upscaling off or TAA: percent of the output resolution the scene renders at. Above 100% supersamples.",
+     Choice,
+     [](const Values& v) { return RenderScaleIndex(v.render_scale); },
+     [](Values& v, int i) { v.render_scale = RenderScaleValue(std::clamp(i, 0, RenderScaleCount - 1)); },
+     RenderScaleIndex(100),
+     [](const char16_t* const** out) {
+         *out = render_scale_labels.data();
+         return RenderScaleCount;
+     },
+     [](const Values& v) { return !HasPresets(v); }},
     {BB_NATIVE_UPSCALING, u"DLSS model", u"DLSS 3 CNN is the lightest; the transformer models are sharper and heavier.",
      Choice, [](const Values& v) { return v.dlss_model.load(); },
      [](Values& v, int i) { v.dlss_model = std::clamp(i, 0, BbSettings::DlssModelCount - 1); }, 1,

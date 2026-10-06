@@ -294,6 +294,17 @@ Transformer 2). The menu shows the preset in use. Cost at 2560x1440 output from 
 RTX 3070 Laptop: CNN E ~1.4 ms, Transformer K ~2.7 ms, Transformer 2 M ~5.5 ms per frame; on
 RTX 20/30 the transformer models are noticeably heavier than on RTX 40/50.
 
+**Render resolution and dynamic resolution:** with the upscaler off or TAA (no presets),
+`render_scale=5..200` (menu: *Render resolution*, steps of 5) renders the scene at that percent of
+the output and scales it to the output under full-resolution HUD; above 100 it supersamples.
+`dynamic_resolution=1` (menu: *Dynamic resolution*) lowers the render resolution in 5% steps while
+the GPU misses the frame rate limit (or is within 5% of it), down to 25% of the output (35% with
+DLSS), and raises it again while the GPU has headroom, up to the preset's or `render_scale`'s size.
+It measures the GPU's busy time per frame (a timestamp at the start and end of each command
+buffer) against the frame interval: when the CPU limits the frame rate the GPU idles part of each
+frame and the resolution is not lowered. DLSS keeps one feature per quality mode across the
+sizes its range accepts (50-100% of the output for Quality, Balanced and Performance).
+
 **Frame generation (DLSS-G, Windows):** `frame_gen=2x|3x|4x|dynamic` (menu: *Frame generation*;
 switching it on or off needs a restart, the multiplier changes live) presents through a D3D12/DXGI
 swapchain with NVIDIA Streamline instead of the Vulkan swapchain: the frame is drawn into Vulkan

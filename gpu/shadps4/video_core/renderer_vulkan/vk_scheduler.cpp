@@ -39,6 +39,15 @@ Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
 #if TRACY_GPU_ENABLED
     profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
 #endif
+    if (instance.GetPhysicalDevice().getProperties().limits.timestampComputeAndGraphics) {
+        const auto device = instance.GetDevice();
+        busy_pool = Check<"create busy timing query pool">(device.createQueryPoolUnique({
+            .queryType = vk::QueryType::eTimestamp,
+            .queryCount = BusySlots * 2,
+        }));
+        device.resetQueryPool(*busy_pool, 0, BusySlots * 2);
+        busy_period_ns = instance.GetPhysicalDevice().getProperties().limits.timestampPeriod;
+    }
     AllocateWorkerCommandBuffers();
     priority_pending_ops_thread =
         std::jthread(std::bind_front(&Scheduler::PriorityPendingOpsThread, this));
@@ -379,6 +388,7 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 
     current_cmdbuf = command_pool.Commit();
     Check(current_cmdbuf.begin(begin_info));
+    BeginBusyTiming();
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
     dynamic_state.Invalidate();
@@ -391,6 +401,53 @@ void Scheduler::AllocateWorkerCommandBuffers() {
         new (profiler_scope) tracy::VkCtxScope{profiler_ctx, &scope_loc, current_cmdbuf, true};
     }
 #endif
+}
+
+void Scheduler::BeginBusyTiming() {
+    busy_slot = BusySlots;
+    if (!busy_pool || busy_pending.size() >= BusySlots - 1) {
+        return; // results not collected yet: this command buffer goes untimed
+    }
+    busy_slot = busy_next;
+    busy_next = (busy_next + 1) % BusySlots;
+    current_cmdbuf.writeTimestamp2(vk::PipelineStageFlagBits2::eTopOfPipe, *busy_pool,
+                                   busy_slot * 2);
+}
+
+void Scheduler::EndBusyTiming(u64 tick) {
+    if (busy_slot == BusySlots) {
+        return;
+    }
+    current_cmdbuf.writeTimestamp2(vk::PipelineStageFlagBits2::eBottomOfPipe, *busy_pool,
+                                   busy_slot * 2 + 1);
+    busy_pending.push_back({busy_slot, tick});
+    busy_slot = BusySlots;
+}
+
+void Scheduler::CollectBusyTiming() {
+    const auto device = instance.GetDevice();
+    u64 added = 0;
+    while (!busy_pending.empty() && work_semaphore.IsFree(busy_pending.front().tick)) {
+        const u32 slot = busy_pending.front().slot;
+        busy_pending.pop_front();
+        std::array<u64, 2> stamps{};
+        const auto result = device.getQueryPoolResults(*busy_pool, slot * 2, 2, sizeof(stamps),
+                                                       stamps.data(), sizeof(u64),
+                                                       vk::QueryResultFlagBits::e64);
+        device.resetQueryPool(*busy_pool, slot * 2, 2);
+        if (result != vk::Result::eSuccess || stamps[1] < stamps[0]) {
+            continue;
+        }
+        // The queue runs command buffers in order: only the part after the previous end counts.
+        const u64 start = std::max(stamps[0], busy_last_end);
+        if (stamps[1] > start) {
+            added += u64(double(stamps[1] - start) * busy_period_ns);
+        }
+        busy_last_end = std::max(busy_last_end, stamps[1]);
+    }
+    if (added) {
+        busy_ns.fetch_add(added, std::memory_order_relaxed);
+    }
 }
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
@@ -417,6 +474,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     SyncRecording();
     // Guest memory copies into staging read by this submission (copy threads).
     WaitHostCopies();
+    EndBusyTiming(signal_value);
     Check(current_cmdbuf.end());
 
     const vk::Semaphore timeline = work_semaphore.Handle();
@@ -450,6 +508,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
     work_semaphore.Refresh();
+    CollectBusyTiming();
     AllocateWorkerCommandBuffers();
 
     // Apply pending operations

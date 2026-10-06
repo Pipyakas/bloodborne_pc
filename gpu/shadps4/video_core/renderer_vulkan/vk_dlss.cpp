@@ -5,7 +5,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #ifdef _WIN32
@@ -387,14 +389,69 @@ struct DlssUpscaler::Impl {
                     BbSettings::DlssGeneration(active), key.hdr ? "HDR" : "LDR", feature_state);
     }
 
+    struct Range {
+        u32 min_width, min_height, max_width, max_height;
+    };
+    /// The render sizes a quality mode accepts at this output (NGX optimal settings), cached.
+    std::optional<Range> DynamicRange(u32 out_width, u32 out_height, int quality) {
+        const u64 id = u64(out_width) << 40 | u64(out_height) << 16 | u64(quality);
+        if (const auto it = ranges.find(id); it != ranges.end()) return it->second;
+        std::optional<Range> range;
+        void* callback = nullptr;
+        if (!Failed(Slot<NgxResult (*)(NgxParameter*, const char*, void**)>(capabilities,
+                                                                          GetVoid)(
+                capabilities, "DLSSOptimalSettingsCallback", &callback)) &&
+            callback) {
+            SetUI(capabilities, "Width", out_width);
+            SetUI(capabilities, "Height", out_height);
+            SetI(capabilities, "PerfQualityValue", quality);
+            SetI(capabilities, "RTXValue", 0);
+            Range r{};
+            if (!Failed(reinterpret_cast<NgxResult (*)(NgxParameter*)>(callback)(capabilities)) &&
+                !Failed(GetUI(capabilities, "DLSS.Get.Dynamic.Min.Render.Width", &r.min_width)) &&
+                !Failed(GetUI(capabilities, "DLSS.Get.Dynamic.Min.Render.Height", &r.min_height)) &&
+                !Failed(GetUI(capabilities, "DLSS.Get.Dynamic.Max.Render.Width", &r.max_width)) &&
+                !Failed(GetUI(capabilities, "DLSS.Get.Dynamic.Max.Render.Height", &r.max_height)) &&
+                r.max_width && r.max_height) {
+                range = r;
+                std::printf("DLSS: quality mode %d at %ux%u takes %ux%u to %ux%u\n", quality,
+                            out_width, out_height, r.min_width, r.min_height, r.max_width,
+                            r.max_height);
+            }
+        }
+        ranges.emplace(id, range);
+        return range;
+    }
+    std::unordered_map<u64, std::optional<Range>> ranges;
+
     bool Record(const Fsr4Upscaler::Frame& f) {
         if (!available) {
             return false;
         }
         const auto& settings = BbSettings::Get();
         const int model = std::clamp(settings.dlss_model.load(), 0, BbSettings::DlssModelCount - 1);
-        const Key wanted{f.render_width, f.render_height, f.output.width, f.output.height,
-                         Quality(f.preset), BbSettings::DlssModels[model].ngx_preset,
+        // Dynamic resolution below the preset's size: the quality mode whose dynamic range
+        // holds the render size (the preset's first; DLAA has none), its feature created at
+        // the range's maximum so the render size can move within it. Without the query,
+        // a feature of exactly the render size.
+        int quality = Quality(f.preset);
+        u32 feature_width = f.render_width, feature_height = f.render_height;
+        if (f.max_render_width > f.render_width || f.max_render_height > f.render_height) {
+            for (const int q : {quality, int(MaxQuality), int(Balanced), int(MaxPerf),
+                                int(UltraPerformance)}) {
+                const auto range = DynamicRange(f.output.width, f.output.height, q);
+                if (range && f.render_width >= range->min_width &&
+                    f.render_width <= range->max_width && f.render_height >= range->min_height &&
+                    f.render_height <= range->max_height) {
+                    quality = q;
+                    feature_width = range->max_width;
+                    feature_height = range->max_height;
+                    break;
+                }
+            }
+        }
+        const Key wanted{feature_width, feature_height, f.output.width, f.output.height,
+                         quality, BbSettings::DlssModels[model].ngx_preset,
                          IsFloatFormat(f.color.format)};
         if (feature && !(wanted == key)) {
             features.emplace_back(key, feature);

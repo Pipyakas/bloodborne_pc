@@ -74,6 +74,11 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.fullscreen = i != 0;
     } else if (key == "frame_limit") {
         v.frame_limit = std::clamp(i, 0, 120);
+    } else if (key == "render_scale") {
+        v.render_scale = std::clamp((i + RenderScaleStep / 2) / RenderScaleStep * RenderScaleStep,
+                                    RenderScaleMin, RenderScaleMax);
+    } else if (key == "dynamic_resolution") {
+        v.dynamic_resolution = i != 0;
     } else if (key == "maximized") {
         v.maximized = i != 0;
     } else if (key == "background_gamepad") {
@@ -152,6 +157,7 @@ void Load() {
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
         {"BB_LAUNCH", "launch"},
         {"BB_DLSS_MODEL", "dlss_model"},            {"BB_FRAME_GEN", "frame_gen"},
+        {"BB_RENDER_SCALE", "render_scale"},        {"BB_DYNAMIC_RES", "dynamic_resolution"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
@@ -236,9 +242,11 @@ void Save() {
     std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\nfullscreen=%d\n", v.model_lod.load(),
                  OutputWidths[v.output_res], OutputHeights[v.output_res], int(v.fullscreen.load()));
     std::fprintf(file,
-                 "maximized=%d\nframe_limit=%d\nbackground_gamepad=%d\nhide_cursor=%d\nmute=%d\nmute_background=%d\n"
+                 "maximized=%d\nframe_limit=%d\nrender_scale=%d\ndynamic_resolution=%d\n"
+                 "background_gamepad=%d\nhide_cursor=%d\nmute=%d\nmute_background=%d\n"
                  "launch=%s\nkeyboard_controls=%d\noverlay_docked=%d\n",
-                 int(v.maximized.load()), v.frame_limit.load(), int(v.background_gamepad.load()),
+                 int(v.maximized.load()), v.frame_limit.load(), v.render_scale.load(),
+                 int(v.dynamic_resolution.load()), int(v.background_gamepad.load()),
                  int(v.hide_cursor.load()), int(v.mute.load()), int(v.mute_background.load()),
                  LaunchName(v.launch_saved), int(v.keyboard_controls.load()),
                  int(v.overlay_docked.load()));
