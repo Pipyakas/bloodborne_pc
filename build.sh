@@ -92,6 +92,19 @@ echo "Built $PWD/out/bb-probe"
 # GPU check for run.sh (live_resolution=auto): links only the Vulkan loader.
 "$CC" "${cstd[@]}" -O2 -Wall -Wextra -Werror tools/gpu_capabilities.c "${libraries[@]}" -o out/bb-gpu-capabilities
 fi
+# Windows: bbport-pkg.exe, the .pkg installer the first-launch screen runs (tools/setup/PkgInstall.cs),
+# with the C# compiler of .NET Framework 4 that Windows includes.
+if [[ -n $windows && ( ! -f out/bbport-pkg.exe ||
+      -n $(find tools/setup/PkgInstall.cs tools/setup/PkgTool.cs -newer out/bbport-pkg.exe -print -quit) ) ]]; then
+    csc="$(cygpath -u "${WINDIR:-C:/Windows}")/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+    if [[ -x $csc ]]; then
+        "$csc" -nologo -target:exe -optimize+ "-out:$(cygpath -w out/bbport-pkg.exe)" -r:System.Numerics.dll \
+            "$(cygpath -w tools/setup/PkgInstall.cs)" "$(cygpath -w tools/setup/PkgTool.cs)"
+        echo "Built $PWD/out/bbport-pkg.exe"
+    else
+        echo "No .NET Framework C# compiler: out/bbport-pkg.exe (installing from .pkg files) not built" >&2
+    fi
+fi
 if [[ ${1:-} == --test ]]; then
     "$CC" "${cstd[@]}" -O2 -g -Wall -Wextra -Werror "${threads[@]}" "${includes[@]}" -I. -Isrc tests/test_pad_hotplug.c src/runtime_host.c "${libraries[@]}" -o out/pad-hotplug-test
     out/pad-hotplug-test

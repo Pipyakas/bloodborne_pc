@@ -864,6 +864,11 @@ bool Visible() {
     return initialized && (menu_open || text_dialog.open || BbSettings::Get().show_fps);
 }
 
+void FontData(const unsigned char** data, int* size) {
+    *data = bb_font_ttf;
+    *size = int(bb_font_ttf_end - bb_font_ttf);
+}
+
 bool CapturesInput() {
     return menu_open || text_dialog.open;
 }
