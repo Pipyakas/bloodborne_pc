@@ -554,6 +554,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         info.AddWait(frame->ready_semaphore, frame->ready_tick);
         info.AddSignal(frame->present_done);
         scheduler.Flush(info);
+        FrameGen::DropInputs(frame->fg_inputs); // frame generation never sees this frame
+        frame->fg_inputs = -1;
         free_frame();
         BbCapture::Presented();
         if (!is_reusing_frame && is_game_frame) {
