@@ -32,6 +32,7 @@ import re
 import struct
 import sys
 import time
+from collections import Counter
 
 csv.field_size_limit(10 ** 9)
 
@@ -129,8 +130,13 @@ def cmd_imports(args):
     symbols = []
     for pos in range(0, len(syms_raw), 24):
         name, info, _, _, value, size = struct.unpack_from("<IBBHQQ", syms_raw, pos)
-        symbols.append(dict(nid=sstr(name).split("#")[0] if name else "",
-                            value=value, size=size))
+        # ELF symbol strings carry the full "NID#lib#ver" key that
+        # import_names.inc is keyed by; keep it for an exact lookup first
+        # (bare-NID fallback only: 2 NIDs exist under two lib suffixes,
+        # both pairs agreeing on the name).
+        full = sstr(name) if name else ""
+        symbols.append(dict(nid=full.split("#")[0] if name else "",
+                            full=full, value=value, size=size))
     order, slots = {}, {}
     for ot, st in ((0x61000029, 0x6100002d), (0x6100002f, 0x61000031)):
         tbl = blob[tags[ot]:tags[ot] + tags[st]]
@@ -145,8 +151,10 @@ def cmd_imports(args):
     nid2name = dict(re.findall(r'\{"([^"]+)",\s*"([^"]+)"', names_txt))
     slot2name, jmp = {}, {}
     for sym, tgts in slots.items():
-        nid = symbols[sym]["nid"]
-        nm = nid2name.get(nid, "NID_" + nid)
+        # exact full-NID match first; fall back to the bare NID stem
+        nm = nid2name.get(symbols[sym]["full"],
+                          nid2name.get(symbols[sym]["nid"],
+                                       "NID_" + symbols[sym]["nid"]))
         for t in tgts:
             slot2name.setdefault(t, nm)
             jmp.setdefault(t, []).append(sym)
