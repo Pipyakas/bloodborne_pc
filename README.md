@@ -250,6 +250,15 @@ again to change the settings; Save settings writes them without building. It nee
 Windows: `setup.bat` compiles `tools\setup\BbportSetup.cs` with the C# compiler of .NET Framework
 4 into `out\bbport-setup.exe`. The steps below do the same by hand.
 
+**From .pkg files:** without a dump, *Install from .pkg files...* in the setup window installs
+the game from its package and the 1.09 update package (fake-signed packages, as shadPS4
+installs) into `<chosen folder>\CUSA…`, which becomes the game folder: the game first, then the
+update's files over it, ~32 GB, about a minute on an SSD. `out\bbport-pkg.exe` does the same
+from a command line (`bbport-pkg install <folder> <game.pkg> <update.pkg>`, `bbport-pkg info
+<pkg>`). The installer (`tools\setup\PkgInstall.cs`) is a C# port of the orbis-pkg, orbis-pfs
+and orbis-pkg-util crates (MIT/Apache-2.0) that shadps4-game-manager uses; delta updates and
+add-ons are not supported.
+
 1. Install MSYS2 to `C:\msys64` (another folder: set `BB_MSYS2`) and, in an MSYS2 shell:
 
    ```
