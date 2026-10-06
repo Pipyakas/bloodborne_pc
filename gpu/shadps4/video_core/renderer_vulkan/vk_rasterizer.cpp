@@ -2062,6 +2062,34 @@ bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline) {
     return true;
 }
 
+// bbport: the guest clears a whole image, or only its first mip levels (the bloom pyramid
+// clears level 0) or first layers. Guest layout is mip-major with each level's layers packed.
+static std::optional<VideoCore::SubresourceRange> ClearedSubresources(
+    const VideoCore::ImageInfo& info, u64 size) {
+    const u32 levels = info.resources.levels;
+    const u32 layers = info.resources.layers;
+    if (size == info.guest_size) {
+        return VideoCore::SubresourceRange{.base = {.level = 0, .layer = 0},
+                                           .extent = info.resources};
+    }
+    if (info.size.depth != 1 || levels > info.mips_layout.size()) {
+        return std::nullopt;
+    }
+    for (u32 level = 0; level < levels; ++level) {
+        const auto& mip = info.mips_layout[level];
+        if (mip.offset + mip.size == size) {
+            return VideoCore::SubresourceRange{.base = {.level = 0, .layer = 0},
+                                               .extent = {.levels = level + 1, .layers = layers}};
+        }
+    }
+    const u32 slice = info.mips_layout[0].size / layers;
+    if (slice != 0 && size < info.mips_layout[0].size && size % slice == 0) {
+        return VideoCore::SubresourceRange{.base = {.level = 0, .layer = 0},
+                                           .extent = {.levels = 1, .layers = u32(size / slice)}};
+    }
+    return std::nullopt;
+}
+
 bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     if (!pipeline->IsCompute()) {
         return false;
@@ -2098,8 +2126,16 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
 
     // Image clear must be valid
     VideoCore::Image& image1 = texture_cache.GetImage(image1_id);
-    if (image1.info.guest_size != buf1.GetSize() || image1.info.num_bits != buf1_bpp ||
-        image1.info.props.is_depth) {
+    const auto range = ClearedSubresources(image1.info, buf1.GetSize());
+    if (!range || image1.info.num_bits != buf1_bpp || image1.info.props.is_depth) {
+        return false;
+    }
+    // bbport: a partial clear leaves the rest of the image as it is, so the rest must already
+    // hold the guest data; otherwise let the dispatch write memory and upload the image once.
+    const bool whole = range->extent.levels == image1.info.resources.levels &&
+                       range->extent.layers == image1.info.resources.layers;
+    if (!whole && (BbToggle::Disabled(BbToggle::RenderTargetMemcpy) ||
+                   True(image1.flags & VideoCore::ImageFlagBits::Dirty))) {
         return false;
     }
 
@@ -2110,18 +2146,10 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     };
     // bbport: with live scaling, clear the reduced proxy the scene passes draw into.
     if (!BbToggle::Disabled(BbToggle::RenderTargetMemcpy) &&
-        scene_targets->ClearProxy(image1_id, clear.color)) {
+        scene_targets->ClearProxy(image1_id, clear.color, *range)) {
         return true;
     }
-    const VideoCore::SubresourceRange range = {
-        .base =
-            {
-                .level = 0,
-                .layer = 0,
-            },
-        .extent = image1.info.resources,
-    };
-    runtime.ClearImage(&image1, range, clear);
+    runtime.ClearImage(&image1, *range, clear);
     return true;
 }
 
@@ -2239,6 +2267,12 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                 bound_buffers.emplace_back(buffer, offset, size, desc.is_written);
                 if (desc.is_written) {
                     // Raw storage-buffer writes can also make an aliased cached image stale.
+                    if (scene_debug_frame) {
+                        std::printf("Scene buffer write: %s %016llx at %#llx size %#x\n",
+                                    stage.sw_stage == Shader::SwStage::Compute ? "cs" : "gfx",
+                                    (unsigned long long)stage.pgm_hash,
+                                    (unsigned long long)vsharp.base_address, u32(size));
+                    }
                     texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
                 }
                 needs_barrier |= runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
