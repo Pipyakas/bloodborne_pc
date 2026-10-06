@@ -73,6 +73,14 @@ void DescribeAddress(const void* address, char* out, std::size_t size) {
     std::snprintf(out, size, "%p", address);
 }
 
+void WaitOnValue(const volatile void* address, std::uint64_t expected) {
+    WaitOnAddress(const_cast<volatile void*>(address), &expected, sizeof(expected), INFINITE);
+}
+
+void WakeOne(void* address) {
+    WakeByAddressSingle(address);
+}
+
 } // namespace BbPlatform
 
 namespace BbThreads {

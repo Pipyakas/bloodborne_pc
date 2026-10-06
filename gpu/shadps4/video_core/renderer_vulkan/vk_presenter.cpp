@@ -11,6 +11,7 @@
 #include "sdl_window.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderdoc.h"
+#include "video_core/renderer_vulkan/vk_frame_gen.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "bbport_capture.h"
 #include "bbport_overlay.h"
@@ -409,6 +410,8 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     // Flush frame creation commands.
     frame->ready_semaphore = draw_scheduler.GetWorkSemaphore()->Handle();
     frame->ready_tick = draw_scheduler.CurrentTick();
+    // bbport: the frame generation inputs the upscaler recorded for this frame.
+    frame->fg_inputs = FrameGen::TakeInputs();
     SubmitInfo info{};
     draw_scheduler.Flush(info);
 
@@ -570,8 +573,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         swapchain.Recreate(window.GetWidth(), window.GetHeight());
     };
 
-    // Recreate the swapchain if the window was resized or was created minimized.
-    if (!swapchain.GetHandle() || window.GetWidth() != swapchain.GetWidth() ||
+    // Recreate the swapchain if the window was resized or was created minimized (frame
+    // generation presents through DXGI: no Vulkan swapchain handle).
+    if ((!swapchain.GetHandle() && !swapchain.UsesDxgi()) || window.GetWidth() != swapchain.GetWidth() ||
         window.GetHeight() != swapchain.GetHeight()) {
         recreate_swapchain();
     }
@@ -664,7 +668,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                                          : vk::AccessFlagBits::eNone,
                 .oldLayout = vk::ImageLayout::eTransferDstOptimal,
                 .newLayout = overlay ? vk::ImageLayout::eColorAttachmentOptimal
-                                     : vk::ImageLayout::ePresentSrcKHR,
+                                     : swapchain.PresentLayout(),
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .image = swapchain_image,
@@ -690,7 +694,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                 .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
                 .dstAccessMask = vk::AccessFlagBits::eNone,
                 .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
-                .newLayout = vk::ImageLayout::ePresentSrcKHR,
+                .newLayout = swapchain.PresentLayout(),
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .image = swapchain_image,
@@ -708,14 +712,20 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     // Flush vulkan commands.
 
     SubmitInfo info{};
-    info.AddWait(swapchain.GetImageAcquiredSemaphore());
+    swapchain.AddAcquireWait(info);
     info.AddWait(frame->ready_semaphore, frame->ready_tick);
-    info.AddSignal(swapchain.GetPresentReadySemaphore());
+    swapchain.AddPresentSignal(info);
     info.AddSignal(frame->present_done);
     scheduler.Flush(info);
 
     // Present to swapchain.
-    {
+    swapchain.SetPresentInputs(is_reusing_frame ? -1 : frame->fg_inputs);
+    frame->fg_inputs = -1;
+    if (swapchain.UsesDxgi()) {
+        // D3D12 presents on its own queue; Streamline may hold Present to pace the frames, and
+        // the GPU thread must keep submitting meanwhile.
+        swapchain.Present();
+    } else {
         std::scoped_lock submit_lock{Scheduler::submit_mutex};
         if (!swapchain.Present()) {
             swapchain.Recreate(window.GetWidth(), window.GetHeight());

@@ -294,6 +294,11 @@ public:
         return dlss_extensions;
     }
 
+    /// bbport: VK_KHR_external_memory_win32 and VK_KHR_external_semaphore_win32 are enabled.
+    bool IsExternalWin32Supported() const {
+        return external_win32;
+    }
+
     /// VK_KHR_shader_clock is supported.
     bool IsShaderSubgroupClockSupported() const {
         return shader_clock && shader_clock_features.shaderSubgroupClock;
@@ -569,6 +574,7 @@ private:
     bool shader_clock{};
     bool compute_shader_derivatives{};
     bool mixed_float_dot_product{}; // bbport: VK_VALVE_shader_mixed_float_dot_product (FSR 4.1.1)
+    bool external_win32{};          // bbport: D3D12 interop (frame generation)
     bool dlss_extensions{};         // bbport: VK_NVX_binary_import + VK_NVX_image_view_handle
     bool supports_memory_budget{};
     bool supports_block_texel_view{};

@@ -33,6 +33,10 @@ int ThreadCpuClock();
 std::uint64_t ReadThreadCpuClockNs(int clock);
 /// "module+0xoffset" for a code address (diagnostics).
 void DescribeAddress(const void* address, char* out, std::size_t size);
+/// Sleeps until the 8 bytes at `address` differ from `expected` (or spuriously): WaitOnAddress.
+void WaitOnValue(const volatile void* address, std::uint64_t expected);
+/// Wakes one thread in WaitOnValue(address).
+void WakeOne(void* address);
 #else
 inline bool GetUsage(bool thread, Usage& out) {
     rusage usage{};

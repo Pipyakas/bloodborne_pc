@@ -67,7 +67,10 @@ typedef struct {
     int32_t *value;
     const int32_t *default_value;
 } BbNativeSetting;
-enum { BB_NATIVE_GRAPHICS = 0, BB_NATIVE_EFFECTS = 1, BB_NATIVE_SCREENS = 2 };
+/* The Graphics list (options screen) opens three screens; BB_NATIVE_GRAPHICS is the list
+ * itself (bbgpu_native_screen_text only). */
+enum { BB_NATIVE_SCREEN = 0, BB_NATIVE_ADVANCED = 1, BB_NATIVE_UPSCALING = 2, BB_NATIVE_SCREENS = 3,
+       BB_NATIVE_GRAPHICS = 3 };
 /* Screen `screen`'s rows, their values read from the settings (call when it opens; choices
  * still pending from a previous opening are applied first). */
 int bbgpu_native_settings(int32_t screen, const BbNativeSetting **rows);

@@ -64,6 +64,13 @@ public:
         return !copying && tracked.contains(image_uid);
     }
     void ResolveAll();
+    /// bbport: copies the reduced proxy of `src` into one for `dst` (same native size and
+    /// texel size, single level) when the proxy holds src's newest content: a guest copy of a
+    /// scene target then stays reduced (no resolve to the native size, no fill back).
+    bool CopyProxy(VideoCore::ImageId src, VideoCore::ImageId dst);
+    /// bbport: clears the reduced proxy of a color scene target instead of the native image
+    /// (a guest compute clear): no resolve before the clear, no fill after it.
+    bool ClearProxy(VideoCore::ImageId id, const vk::ClearColorValue& value);
     bool debug = false; ///< BB_SCENE_DEBUG frame: print resolves and fills
 private:
     struct Entry {
@@ -78,7 +85,9 @@ private:
     static constexpr u64 Key(u64 uid, u32 level) {
         return uid << 4 | level;
     }
-    Entry& Get(VideoCore::ImageId, u32 level = 0);
+    /// The proxy of an image level, created on first use and filled from the native image
+    /// unless `fill` is false (the caller overwrites it).
+    Entry& Get(VideoCore::ImageId, u32 level = 0, bool fill = true);
     vk::ImageView View(Entry&, const VideoCore::Image&, const VideoCore::ImageViewInfo&);
     void Copy(Entry&, VideoCore::Image&, bool to_native);
     // Depth/stencil formats without blit support (D32S8 on RADV) are resampled by a

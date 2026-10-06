@@ -257,6 +257,38 @@ Windows: `setup.bat` compiles `tools\setup\BbportSetup.cs` with the C# compiler 
    Quality, scene 2560x1440) the RTX 4090 above stays at the 120 Hz display limit. The GTK
    launcher and the AppImage are Linux-only.
 
+**DLSS on NVIDIA RTX:** `upscaler=dlss` needs NVIDIA's model next to the executable
+(`bash tools/fetch_dlss.sh`, or the setup program's DLSS download). `dlss_model` (menu: *DLSS
+model*) picks the network: `auto` (the driver's choice per preset: K, M for Performance, L for
+Ultra Performance), `e` (DLSS 3 CNN), `j`/`k` (DLSS 4 Transformer), `m`/`l` (DLSS 4.5
+Transformer 2). The menu shows the preset in use. Cost at 2560x1440 output from 1280x720 on an
+RTX 3070 Laptop: CNN E ~1.4 ms, Transformer K ~2.7 ms, Transformer 2 M ~5.5 ms per frame; on
+RTX 20/30 the transformer models are noticeably heavier than on RTX 40/50.
+
+**Frame generation (DLSS-G, Windows):** `frame_gen=2x|3x|4x|dynamic` (menu: *Frame generation*;
+switching it on or off needs a restart, the multiplier changes live) presents through a D3D12/DXGI
+swapchain with NVIDIA Streamline instead of the Vulkan swapchain: the frame is drawn into Vulkan
+images shared with D3D12, and the upscaler's depth, motion vectors and HUD-less scene are tagged
+for DLSS-G (`vk_frame_gen.cpp`). `dynamic` is NVIDIA's dynamic multi-frame generation toward the
+display refresh rate; the fixed modes cap the rendered frame rate at refresh / multiplier with
+Reflex. It needs an upscaler (DLSS, FSR or TAA), hardware-accelerated GPU scheduling, and:
+
+- `bash tools/fetch_streamline.sh`: Streamline 2.14.1's signed DLLs into `out\streamline\`;
+- on RTX 20/30, the [dlssg_sm86](https://github.com/sdli1995/dlssg_for_sm86) mod: its `version.dll` (310.9 build) and
+  `dlssg_sm86.ini` in `out\dlssg_sm86\` (`BB_DLSSG_MOD` names another file). bbport loads it
+  before Streamline, as a game would through its proxy DLL. RTX 40/50 need no mod.
+
+DLSS-G pauses while the window is not focused (its own rule) and in menus and loading screens.
+Outputs other than 1080p also give it the scene without the HUD; at 1080p the UI is part of what
+it interpolates. Anything missing leaves the Vulkan swapchain in use; the menu says why.
+Verified on an RTX 3070 Laptop with dlssg_sm86 0.3.5: 2x, 3x, 4x and dynamic present 2, 3, 4 and
+up to 4 frames per rendered frame. `BB_SL_LOG=1` prints Streamline's log.
+
+**Laptops:** CPU and GPU share one power budget, and tools like G-Helper or Armoury Crate lock
+the GPU clock per profile (`nvidia-smi -lgc`): on battery, G-Helper's *Silent* profile capped an
+RTX 3070 Laptop at 800 MHz (35 FPS where AC gave 50-60). Use the charger and a performance
+profile; at 1440p the GPU (not the CPU) is the limit on that machine.
+
 How it differs from Linux, all on the Win32 API directly (no POSIX layer): the guest address
 space is reserved at start as one placeholder and mapped with section views
 (`src/win32_memory.c`); the runtime's locks, condition variables, threads and clocks are SRW

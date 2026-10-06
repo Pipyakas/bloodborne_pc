@@ -4,6 +4,7 @@
 #pragma once
 
 #include <mutex>
+#include <utility>
 #include <vector>
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
@@ -16,6 +17,7 @@ namespace Vulkan {
 
 class Instance;
 class Scheduler;
+struct SubmitInfo;
 
 class Swapchain {
 public:
@@ -82,6 +84,22 @@ public:
         return present_ready[image_index];
     }
 
+    /// bbport: the presenter's submission waits for the acquired image and signals that it can
+    /// be presented (binary semaphores, or the fence shared with D3D12 for frame generation).
+    void AddAcquireWait(SubmitInfo& info) const;
+    void AddPresentSignal(SubmitInfo& info) const;
+    /// Layout the presented image is left in: PresentSrc, or General when D3D12 reads it.
+    vk::ImageLayout PresentLayout() const {
+        return dxgi ? vk::ImageLayout::eGeneral : vk::ImageLayout::ePresentSrcKHR;
+    }
+    bool UsesDxgi() const {
+        return dxgi;
+    }
+    /// Frame generation inputs of the frame presented next (FrameGen::TakeInputs).
+    void SetPresentInputs(int inputs) {
+        present_inputs = inputs;
+    }
+
     bool HasHDR() const {
         return supports_hdr;
     }
@@ -107,6 +125,9 @@ private:
 
     /// Performs creation of image views and framebuffers from the swapchain images
     void SetupImages();
+
+    /// bbport: the output resolution (menu), the DXGI back buffer size.
+    std::pair<u32, u32> OutputSize() const;
 
     /// Creates the image acquired and present ready semaphores
     void RefreshSemaphores();
@@ -134,6 +155,8 @@ private:
     bool needs_recreation = true;
     bool needs_hdr = false;    // The game requested HDR swapchain
     bool supports_hdr = false; // SC supports HDR output
+    bool dxgi = false;         // bbport: presenting through D3D12 for frame generation
+    int present_inputs = -1;
 };
 
 } // namespace Vulkan

@@ -61,6 +61,16 @@ public:
     /// Vertical field of view and near/far planes of the current camera.
     [[nodiscard]] float VerticalFov() const noexcept;
     [[nodiscard]] float Near() const noexcept;
+    /// The current and previous camera (scene constants), for frame generation.
+    struct Cameras {
+        std::array<float, 12> view, inv_view, prev_view, prev_inv_view; ///< 3x4 rows
+        std::array<float, 4> proj, prev_proj; ///< x scale, y scale, z scale, z offset
+        bool valid;
+    };
+    [[nodiscard]] Cameras GetCameras() const noexcept {
+        return {current.view, current.inv_view, previous.view, previous.inv_view,
+                current.proj, previous.proj, current.valid && previous.valid};
+    }
     // Current projection, previous projection, and row Z of previous-view * inverse-view.
     [[nodiscard]] std::array<std::array<float, 4>, 3> TaaDepthParameters() const noexcept;
 
