@@ -13,6 +13,12 @@ without asking again. Do not push unless the user explicitly requests it.
 Explicit task instructions (for example, review only, leave uncommitted, or do not
 merge) override this default.
 
+During development, the user authorizes agents to close the running playable master
+build before rebuilding/updating it, without asking again. Match the executable path
+`C:\code\bloodborne_pc\out\bb-probe.exe` exactly: request a graceful close first,
+then terminate that confirmed master instance if it does not exit. Do not stop games
+running from other worktrees or unrelated applications under this permission.
+
 Before reporting implementation work as finished:
 
 1. Review and test your changes. Keep unfinished, experimental, failing, or
