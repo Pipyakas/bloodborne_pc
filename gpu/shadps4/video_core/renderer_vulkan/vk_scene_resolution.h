@@ -43,7 +43,9 @@ public:
     Target Read(VideoCore::ImageId, const VideoCore::ImageViewInfo&,
                 vk::PipelineStageFlags2 = vk::PipelineStageFlagBits2::eComputeShader,
                 vk::AccessFlags2 = vk::AccessFlagBits2::eShaderRead);
-    void NativeAccess(VideoCore::Image&, vk::AccessFlags2);
+    /// Resolve/invalidate only the accessed mip levels; no range means the whole image.
+    void NativeAccess(VideoCore::Image&, vk::AccessFlags2,
+                      std::optional<VideoCore::SubresourceRange> = {});
     /// The proxy of `image` for sampling when it holds the current content (else nullopt: the
     /// native image is current). Transitions only after other use (attachment, copy).
     /// Mipmapped targets have one proxy per level: views of one level only.

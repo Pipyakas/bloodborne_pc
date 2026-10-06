@@ -5,12 +5,17 @@
 #include <cstdio>
 #include <cstring>
 #include "common/slot_vector.h"
+// Vulkan-Hpp's DispatchLoaderBase changes layout with NDEBUG. Match the production
+// library while importing Vulkan headers, then re-enable the test's assertions.
+#define NDEBUG
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
 #include "video_core/texture_cache/blit_helper.h"
 #include <vk_mem_alloc.h>
+#undef NDEBUG
+#include <cassert>
 
 int main() {
     using namespace Vulkan;
@@ -61,7 +66,7 @@ int main() {
         .requiredFlags=VK_MEMORY_PROPERTY_HOST_COHERENT_BIT};
     assert(vmaCreateBuffer(instance.GetAllocator(), &bi, &ac, &readback, &allocation, &ai) == VK_SUCCESS);
     const auto pixel = [&](vk::Image image, vk::ImageAspectFlagBits aspect,
-                           vk::ImageLayout layout, u32 w, u32 h) {
+                           vk::ImageLayout layout, u32 w, u32 h, u32 level = 0) {
         scheduler.EndRendering();
         const auto cmd = scheduler.CommandBuffer();
         const vk::MemoryBarrier2 b{.srcStageMask=vk::PipelineStageFlagBits2::eAllCommands,
@@ -69,7 +74,7 @@ int main() {
             .dstStageMask=vk::PipelineStageFlagBits2::eTransfer,
             .dstAccessMask=vk::AccessFlagBits2::eTransferRead};
         cmd.pipelineBarrier2({.memoryBarrierCount=1,.pMemoryBarriers=&b}, dispatch);
-        const vk::BufferImageCopy region{.imageSubresource={aspect,0,0,1},
+        const vk::BufferImageCopy region{.imageSubresource={aspect,level,0,1},
             .imageOffset={s32(w-1),s32(h-1),0},.imageExtent={1,1,1}};
         cmd.copyImageToBuffer(image, layout, readback, region, dispatch);
         const vk::MemoryBarrier2 host{.srcStageMask=vk::PipelineStageFlagBits2::eTransfer,
@@ -161,6 +166,13 @@ int main() {
     assert(targets.Eligible(half) && !targets.EligibleScene(half));
     assert((targets.ProxySize(half, 0) == SceneResolution::Size{320, 180}));
     assert((targets.ProxySize(half, 2) == SceneResolution::Size{80, 45}));
+    const VideoCore::SubresourceRange all_levels{.base={0,0},.extent={4,1}};
+    vk::ClearValue blue{};
+    blue.color.float32 = std::array{0.f,0.f,1.f,1.f};
+    runtime.ClearImage(&half, all_levels, blue);
+    runtime.Transit(&half, vk::ImageLayout::eTransferSrcOptimal,
+                    vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+    runtime.FlushBarriers();
     auto lv = cv;
     lv.range.base.level = 2;
     const auto proxy = targets.Attachment(half_id, lv);
@@ -174,6 +186,14 @@ int main() {
         cmd.endRendering(dispatch);
     }
     assert(targets.ProxyCurrent(half, 2, 1) && !targets.ProxyCurrent(half, 0, 4));
+    // Writing another native mip must neither resolve nor invalidate level 2's green proxy.
+    const VideoCore::SubresourceRange other_level{.base={1,0},.extent={1,1}};
+    runtime.ClearImage(&half, other_level, blue);
+    runtime.FlushBarriers();
+    assert(targets.ProxyCurrent(half, 2, 1));
+    assert(pixel(half.GetImage(), vk::ImageAspectFlagBits::eColor,
+                 vk::ImageLayout::eTransferSrcOptimal, 240, 135, 2) == 0xffff0000);
+    std::puts("Scene targets: unrelated native mip preserves dirty proxy PASS");
     // A native access resolves the level: its last texel (239, 134) is the proxy's colour.
     runtime.Transit(&half, vk::ImageLayout::eTransferSrcOptimal,
                     vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
@@ -196,6 +216,18 @@ int main() {
         assert(result == 0xff00ff00);
     }
     std::puts("Scene targets: half-resolution mip level proxy roundtrip PASS");
+    // Conversely, a native write overlapping the proxy must invalidate it.
+    const VideoCore::SubresourceRange proxy_level{.base={2,0},.extent={1,1}};
+    runtime.ClearImage(&half, proxy_level, blue);
+    runtime.FlushBarriers();
+    assert(!targets.ProxyCurrent(half, 2, 1));
+    runtime.Transit(&half, vk::ImageLayout::eTransferSrcOptimal,
+                    vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
+                    proxy_level);
+    runtime.FlushBarriers();
+    assert(pixel(half.GetImage(), vk::ImageAspectFlagBits::eColor,
+                 vk::ImageLayout::eTransferSrcOptimal, 240, 135, 2) == 0xffff0000);
+    std::puts("Scene targets: overlapping native mip write invalidates proxy PASS");
     scheduler.Finish();
     vmaDestroyBuffer(instance.GetAllocator(),readback,allocation);
 }

@@ -122,13 +122,17 @@ void SceneTargets::ResolveAll() {
         }
     }
 }
-void SceneTargets::NativeAccess(VideoCore::Image& image, vk::AccessFlags2 access) {
+void SceneTargets::NativeAccess(VideoCore::Image& image, vk::AccessFlags2 access,
+                                std::optional<VideoCore::SubresourceRange> range) {
     if (copying || !image.scene_proxy) return; // most images never had a proxy
     constexpr auto writes = vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eTransferWrite |
         vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eDepthStencilAttachmentWrite |
         vk::AccessFlagBits2::eMemoryWrite;
     const u32 levels = std::min(16u, image.info.resources.levels);
-    for (u32 level = 0; level < levels; ++level) {
+    const bool ranged = range && !BbToggle::Disabled(BbToggle::SceneMipAccess);
+    const u32 first = ranged ? std::min(levels, range->base.level) : 0;
+    const u32 end = ranged ? first + std::min(levels - first, range->extent.levels) : levels;
+    for (u32 level = first; level < end; ++level) {
         const auto it = entries.find(Key(image.image_uid, level));
         if (it == entries.end()) continue;
         auto& entry = *it->second;
