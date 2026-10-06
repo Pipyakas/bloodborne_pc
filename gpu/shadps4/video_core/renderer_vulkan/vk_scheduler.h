@@ -844,6 +844,12 @@ public:
         return work_semaphore.IsFree(tick);
     }
 
+    /// bbport: GPU busy time (ns) of this scheduler's completed command buffers since the last
+    /// call: a timestamp at the start and end of each, overlaps counted once. Always on.
+    [[nodiscard]] u64 TakeGpuBusyNs() noexcept {
+        return busy_ns.exchange(0, std::memory_order_relaxed);
+    }
+
     /// Returns the scheduler timeline semaphore.
     [[nodiscard]] Semaphore* GetWorkSemaphore() noexcept {
         return &work_semaphore;
@@ -881,8 +887,25 @@ private:
     void PriorityPendingOpsThread(std::stop_token stoken);
 
 private:
+    void BeginBusyTiming();
+    void EndBusyTiming(u64 tick);
+    void CollectBusyTiming();
+
     const Instance& instance;
     Semaphore work_semaphore;
+    // bbport: GPU busy timing (TakeGpuBusyNs); slots of two queries, guarded by submit_mutex.
+    static constexpr u32 BusySlots = 256;
+    vk::UniqueQueryPool busy_pool;
+    struct BusyQuery {
+        u32 slot;
+        u64 tick;
+    };
+    std::deque<BusyQuery> busy_pending;
+    u32 busy_next = 0;
+    u32 busy_slot = BusySlots; ///< slot of current_cmdbuf, BusySlots when not timed
+    u64 busy_last_end = 0;
+    double busy_period_ns = 1.0;
+    std::atomic<u64> busy_ns{0};
     CommandPool command_pool;
     DynamicState dynamic_state;
     SubmitFunc on_submit{};

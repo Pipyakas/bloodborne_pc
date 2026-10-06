@@ -6,6 +6,7 @@
 #include "video_core/renderer_vulkan/ui_composition.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -15,6 +16,7 @@
 #include <vk_mem_alloc.h>
 
 #include "bbport_settings.h"
+#include "core/emulator_settings.h"
 #include "bbport_toggles.h"
 #include "ffx_vk_portable.h"
 #include "video_core/host_shaders/upscale_merge_comp.h"
@@ -317,16 +319,30 @@ bool TemporalUpscaler::OnFrameStart() {
     if (applied_upscaler != upscaler) fsr4_failed = false; // retry after a menu change
     // Dynamic scene resolution scaling (live preset switching) works on all GPUs.
     // On GPUs without D32S8 blit support, UI depth is cleared instead of copied from scene.
+    bool resized = false;
     if (!scaled_session) {
-        scene_targets.SetSize(SceneResolution::ForPreset(active ? preset : 0,
-                                                        {target_width, target_height}));
+        // Upscalers render at their preset's size; upscaler off and TAA at render_scale
+        // percent of the output (above 100 supersamples). Dynamic resolution goes below either.
+        const SceneResolution::Size output{target_width, target_height};
+        const bool presets = active && upscaler != BbSettings::UpscalerTaa;
+        const int scale = settings.render_scale.load();
+        const auto max_render = presets ? SceneResolution::ForPreset(preset, output)
+                                        : SceneResolution::ForScale(scale, output);
+        max_render_width = max_render.width;
+        max_render_height = max_render.height;
+        const int base_percent = presets ? int(100.0f / BbSettings::PresetScale(preset)) : scale;
+        // DLSS takes at most a 3x upscale (Ultra Performance).
+        const int dynamic = UpdateDynamicResolution(
+            base_percent, upscaler == BbSettings::UpscalerDlss ? 35 : BbSettings::DynamicPercentMin);
+        resized = scene_targets.SetSize(dynamic ? SceneResolution::ForScale(dynamic, output)
+                                                : max_render);
         render_width = scene_targets.Size().width;
         render_height = scene_targets.Size().height;
     }
     BbSettings::Get().active_render_width = Scaled() ? render_width : scene_targets.Size().width;
     BbSettings::Get().active_render_height = Scaled() ? render_height : scene_targets.Size().height;
-    if (changed || !dispatched_last_frame) reset = true;
-    if (changed) jitter_index = 0;
+    if (changed || resized || !dispatched_last_frame) reset = true;
+    if (changed || resized) jitter_index = 0;
     applied_preset = preset;
     applied_output = output;
     applied_upscaler = upscaler;
@@ -348,7 +364,7 @@ bool TemporalUpscaler::OnFrameStart() {
     // Halton(2, 3); the menu or toggle 1 << 25 disables it.
     if (!jitter_on) {
         jitter = {};
-        return changed;
+        return changed || resized;
     }
     // CameraMotion::OnDisplayPass has already cleared Depth(). Use the context's render
     // size, which survives the frame boundary (Performance 960 -> 1920 needs 32 phases).
@@ -356,7 +372,79 @@ bool TemporalUpscaler::OnFrameStart() {
         : Motion::JitterPhases(scene_targets.Size().width, 1920);
     jitter_index = jitter_index % phases + 1;
     jitter = {Halton(jitter_index, 2) - 0.5f, Halton(jitter_index, 3) - 0.5f};
-    return changed;
+    return changed || resized;
+}
+
+int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percent) {
+    using namespace std::chrono;
+    auto& settings = BbSettings::Get();
+    const auto now = steady_clock::now();
+    drs_busy_ns += scheduler.TakeGpuBusyNs();
+    ++drs_frames;
+    const bool enabled = settings.dynamic_resolution && !scaled_session;
+    if (!enabled) {
+        dynamic_percent = 0;
+    }
+    if (drs_window == steady_clock::time_point{}) drs_window = now;
+    const double window_ms = duration<double, std::milli>(now - drs_window).count();
+    if (window_ms < 500.0 || drs_frames < 8) {
+        settings.dynamic_percent = enabled ? (dynamic_percent ? dynamic_percent : base_percent) : 0;
+        return dynamic_percent;
+    }
+    // Per rendered frame over the window: G, the GPU's busy time; F, the frame interval.
+    const double gpu_ms = drs_busy_ns / 1e6 / drs_frames;
+    const double frame_ms = window_ms / drs_frames;
+    settings.gpu_frame_ms = float(gpu_ms);
+    drs_window = now;
+    drs_busy_ns = 0;
+    drs_frames = 0;
+    if (!enabled) {
+        settings.dynamic_percent = 0;
+        return 0;
+    }
+    const u32 limit = EmulatorSettings.GetFrameLimit();
+    const double target_ms = 1000.0 / double(limit ? limit : EmulatorSettings.GetVblankFrequency());
+    const int floor = std::min(floor_percent, base_percent);
+    const int current = dynamic_percent ? dynamic_percent : base_percent;
+    const double since_change = duration<double>(now - drs_changed).count();
+    int next = current;
+    // GPU-bound: busy for most of the frame, and either missing the target or within 5% of
+    // it (no headroom for heavier scenes). When the CPU limits the frame rate, the GPU is idle
+    // part of each frame and nothing is lowered.
+    const bool gpu_bound = gpu_ms > frame_ms * 0.9;
+    if (gpu_bound && (frame_ms > target_ms * 1.05 || gpu_ms > target_ms * 0.95) &&
+        since_change >= 1.0 && current > floor) {
+        // GPU time grows with the pixel count (percent squared) plus fixed costs: aim at 85%
+        // of the target in one step, in 5% steps.
+        const double fit = current * std::sqrt(0.85 * target_ms / gpu_ms);
+        next = std::clamp(int(fit) / 5 * 5, floor, std::max(floor, (current - 1) / 5 * 5));
+        // A step up undone within 3 s is not retried for 15 s (no oscillation).
+        if (drs_raised && since_change < 3.0) {
+            drs_blocked = current;
+            drs_blocked_at = now;
+        }
+    } else if (current < base_percent && since_change >= 2.0 &&
+               gpu_ms < 0.8 * std::max(target_ms, frame_ms)) {
+        // Headroom against whatever limits the frame (the target, or the CPU): a step up.
+        const int up = std::min(base_percent, (current + 5) / 5 * 5);
+        if (up != drs_blocked || duration<double>(now - drs_blocked_at).count() >= 15.0) {
+            next = up;
+        }
+    }
+    if (++drs_reports % 10 == 0 && next == current) {
+        std::printf("Dynamic resolution: %d%% (GPU %.1f ms, frame %.1f ms, target %.1f ms)\n",
+                    current, gpu_ms, frame_ms, target_ms);
+    }
+    if (next != current) {
+        drs_raised = next > current;
+        std::printf("Dynamic resolution: %d%% -> %d%% (GPU %.1f ms, frame %.1f ms, target "
+                    "%.1f ms)\n",
+                    current, next, gpu_ms, frame_ms, target_ms);
+        drs_changed = now;
+    }
+    dynamic_percent = next >= base_percent ? 0 : next;
+    settings.dynamic_percent = next;
+    return dynamic_percent;
 }
 
 void TemporalUpscaler::OnDispatch(u64 cs_hash) {
@@ -374,10 +462,6 @@ void TemporalUpscaler::OnDispatch(u64 cs_hash) {
 bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     const bool use_fsr4 = UseFsr4();
     const bool use_taa = BbSettings::Get().upscaler == BbSettings::UpscalerTaa;
-    if (use_taa && (w != ow || h != oh)) {
-        std::printf("TAA: remove BB_RENDER_RES to use native-resolution TAA\n");
-        return false;
-    }
     if (resources_ready && w == width && h == height && ow == out_width && oh == out_height &&
         hdr == context_hdr && use_fsr4 == resources_fsr4 && use_taa == resources_taa) {
         return true;
@@ -506,15 +590,22 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
                    vk::ImageUsageFlagBits::eTransferSrc);
     make_image(reactive_image, reactive_view, vk::Format::eR8Unorm,
                vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled);
+    // TAA runs at the render size (render_scale); a different output size is reached by a
+    // linear resample of its result (taa_scaled_image).
     for (u32 i = 0; i < taa_history.size(); ++i) {
         taa_history_views[i].reset();
         taa_history[i] = VideoCore::UniqueImage{};
         if (use_taa) {
             make_image(taa_history[i], taa_history_views[i], vk::Format::eR32G32B32A32Sfloat,
                        vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
-                           vk::ImageUsageFlagBits::eTransferSrc,
-                       ow, oh);
+                           vk::ImageUsageFlagBits::eTransferSrc);
         }
+    }
+    taa_scaled_view.reset();
+    taa_scaled_image = VideoCore::UniqueImage{};
+    if (use_taa && (w != ow || h != oh)) {
+        make_image(taa_scaled_image, taa_scaled_view, vk::Format::eR16G16B16A16Sfloat,
+                   vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc);
     }
     taa_next = 0;
     CreatePipelines();
@@ -666,9 +757,24 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
     }
     cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = u32(barriers.size()),
                              .pImageMemoryBarriers = barriers.data()});
+    const bool scaled = bool(taa_scaled_image);
+    const vk::ImageView result = scaled ? *taa_scaled_view : *output_view;
+    if (scaled) {
+        const vk::ImageMemoryBarrier2 to_write{
+            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcAccessMask = vk::AccessFlagBits2::eMemoryRead,
+            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+                             vk::AccessFlagBits2::eShaderStorageWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .image = vk::Image(taa_scaled_image),
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_write});
+    }
     const std::array<vk::ImageView, 7> views{
         color, depth, *motion_view, *taa_history_views[1 - taa_next],
-        *output_view, *taa_history_views[taa_next], *opaque_view};
+        result, *taa_history_views[taa_next], *opaque_view};
     std::array<vk::DescriptorImageInfo, 7> infos{};
     std::array<vk::WriteDescriptorSet, 7> writes{};
     for (u32 i = 0; i < infos.size(); ++i) {
@@ -705,7 +811,7 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
     cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *taa_pipeline_layout, 0, writes);
     cmdbuf.pushConstants(*taa_pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0,
                          sizeof(params), &params);
-    cmdbuf.dispatch((out_width + 7) / 8, (out_height + 7) / 8, 1);
+    cmdbuf.dispatch((width + 7) / 8, (height + 7) / 8, 1);
     const auto& settings = BbSettings::Get();
     const float strength = std::clamp(settings.sharpness.load(), 0.0f, 2.0f);
     if (settings.sharpen && strength > 0.0f && !(params.pad & 0xffu)) {
@@ -718,7 +824,7 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
         cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &resolved});
         const std::array<vk::DescriptorImageInfo, 2> sharpen_infos{{
             {.imageView = *taa_history_views[taa_next], .imageLayout = vk::ImageLayout::eGeneral},
-            {.imageView = *output_view, .imageLayout = vk::ImageLayout::eGeneral}}};
+            {.imageView = result, .imageLayout = vk::ImageLayout::eGeneral}}};
         std::array<vk::WriteDescriptorSet, 2> sharpen_writes{};
         for (u32 i = 0; i < sharpen_writes.size(); ++i)
             sharpen_writes[i] = {.dstBinding = i, .descriptorCount = 1,
@@ -728,9 +834,53 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
                                     *taa_sharpen_pipeline_layout, 0, sharpen_writes);
         cmdbuf.pushConstants(*taa_sharpen_pipeline_layout, vk::ShaderStageFlagBits::eCompute,
                              0, sizeof(strength), &strength);
-        cmdbuf.dispatch((out_width + 7) / 8, (out_height + 7) / 8, 1);
+        cmdbuf.dispatch((width + 7) / 8, (height + 7) / 8, 1);
     }
     taa_next = 1 - taa_next;
+    if (!scaled) {
+        return;
+    }
+    // Render size -> output size (the caller has the output image in General for writes).
+    const std::array<vk::ImageMemoryBarrier2, 2> to_blit{{
+        {.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+         .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+         .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+         .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+         .oldLayout = vk::ImageLayout::eGeneral,
+         .newLayout = vk::ImageLayout::eGeneral,
+         .image = vk::Image(taa_scaled_image),
+         .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}},
+        {.srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+         .srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+         .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+         .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+         .oldLayout = vk::ImageLayout::eGeneral,
+         .newLayout = vk::ImageLayout::eGeneral,
+         .image = vk::Image(output_image),
+         .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}},
+    }};
+    cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = u32(to_blit.size()),
+                             .pImageMemoryBarriers = to_blit.data()});
+    const vk::ImageBlit region{
+        .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(width), s32(height), 1}},
+        .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .dstOffsets = std::array{vk::Offset3D{0, 0, 0},
+                                 vk::Offset3D{s32(out_width), s32(out_height), 1}},
+    };
+    cmdbuf.blitImage(vk::Image(taa_scaled_image), vk::ImageLayout::eGeneral,
+                     vk::Image(output_image), vk::ImageLayout::eGeneral, region,
+                     vk::Filter::eLinear);
+    const vk::ImageMemoryBarrier2 written{
+        .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+        .oldLayout = vk::ImageLayout::eGeneral,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = vk::Image(output_image),
+        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+    cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &written});
 }
 
 void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, bool ldr, u32 w,
@@ -1020,6 +1170,9 @@ void TemporalUpscaler::Run() {
         !(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
         return;
     }
+    if (BbSettings::Get().upscaler != BbSettings::UpscalerTaa && (w > ow || h > oh)) {
+        return; // a supersampled TAA scene the frame the upscaler changed
+    }
     if (!EnsureResources(w, h, ow, oh, true)) {
         failed = true;
         return;
@@ -1293,7 +1446,10 @@ float TemporalUpscaler::SceneMipBias() const {
 }
 
 bool TemporalUpscaler::Scaled() const {
-    return scaled_session || target_width != 1920 || target_height != 1080;
+    // Upscaler off with render_scale away from 100: the scene is linearly scaled to the
+    // output under native-resolution UI, as for other output sizes.
+    return scaled_session || target_width != 1920 || target_height != 1080 ||
+           (!Active() && scene_targets.Reduced());
 }
 
 void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
@@ -1548,8 +1704,10 @@ void TemporalUpscaler::RunScaled() {
     const u32 iw = color.info.size.width, ih = color.info.size.height;
     const auto [w, h] = SceneSize(iw, ih);
     const u32 ow = target_width, oh = target_height;
-    if (depth.info.size.width != iw || depth.info.size.height != ih || w > ow || h > oh) {
-        return;
+    const bool taa = BbSettings::Get().upscaler == BbSettings::UpscalerTaa;
+    if (depth.info.size.width != iw || depth.info.size.height != ih ||
+        (!taa && (w > ow || h > oh))) {
+        return; // only TAA supersamples (render_scale above 100)
     }
     if (!EnsureResources(w, h, ow, oh, false)) {
         failed = true;
@@ -1988,6 +2146,8 @@ bool TemporalUpscaler::RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image 
                    vk::Format::eR16G16B16A16Sfloat},
         .render_width = w,
         .render_height = h,
+        .max_render_width = std::max(w, max_render_width),
+        .max_render_height = std::max(h, max_render_height),
         .preset = applied_preset,
         .jitter = {sign * jitter[0], sign * jitter[1]},
         .frame_ms = frame_ms,

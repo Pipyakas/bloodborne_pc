@@ -379,6 +379,29 @@ void Menu() {
     }
     const bool upscaler_on = s.upscaler != BbSettings::UpscalerOff;
     const bool taa = s.upscaler == BbSettings::UpscalerTaa;
+    if (!upscaler_on || taa) {
+        // No presets: the render resolution is a percentage of the output.
+        int scale = s.render_scale;
+        const bool changed = ImGui::SliderInt("Render resolution", &scale, BbSettings::RenderScaleMin,
+                                              BbSettings::RenderScaleMax, "%d%%");
+        scale = std::clamp((scale + BbSettings::RenderScaleStep / 2) / BbSettings::RenderScaleStep *
+                               BbSettings::RenderScaleStep,
+                           BbSettings::RenderScaleMin, BbSettings::RenderScaleMax);
+        Store(s.render_scale, scale, changed);
+        Hint("Percent of the output resolution the scene renders at, in steps of 5. Below 100 "
+             "it renders fewer pixels and is scaled up (soft); above 100 it renders more and "
+             "is scaled down (supersampling, sharper, much more GPU time). The HUD and menus "
+             "stay at the output resolution.");
+    }
+    Checkbox("Dynamic resolution", s.dynamic_resolution);
+    Hint("While the GPU cannot reach the frame rate limit, the scene's render resolution drops "
+         "in 5% steps (to 25% of the output, 35% with DLSS); it rises again while the GPU has "
+         "headroom, up to the preset's or the render resolution's size. When the CPU limits the "
+         "frame rate, the resolution is not lowered. Each change is a short pause.");
+    if (s.dynamic_resolution) {
+        ImGui::Text("Dynamic resolution: %d%%, GPU %.1f ms per frame", s.dynamic_percent.load(),
+                    s.gpu_frame_ms.load());
+    }
     ImGui::BeginDisabled(!upscaler_on);
     ImGui::BeginDisabled(taa);
     int preset = taa ? BbSettings::NativeAA : s.preset.load();
@@ -402,8 +425,8 @@ void Menu() {
     }
     ImGui::EndDisabled();
     if (taa) {
-        ImGui::TextWrapped("TAA anti-aliases the scene at the output resolution, without an FSR "
-                           "model or upscaling. The saved preset returns when an upscaler is selected.");
+        ImGui::TextWrapped("TAA anti-aliases the scene at the render resolution above, without "
+                           "an FSR model. The saved preset returns when an upscaler is selected.");
     }
     ImGui::Text("Active scene render: %d x %d", s.active_render_width.load(),
                 s.active_render_height.load());
@@ -638,14 +661,19 @@ void FpsCounter() {
     }
     // The upscaler's name only while it runs: 2D menus and loading screens are presented as
     // drawn, scaled to the window without it.
-    ImGui::Text("%.0f FPS  %.1f ms  %s", fps, frame_ms_avg,
+    char dynamic[24] = "";
+    if (s.dynamic_resolution && s.dynamic_percent) {
+        std::snprintf(dynamic, sizeof(dynamic), "  %d%%", s.dynamic_percent.load());
+    }
+    ImGui::Text("%.0f FPS  %.1f ms  %s%s", fps, frame_ms_avg,
                 !s.upscaler_ran                          ? ""
                 : s.upscaler == BbSettings::UpscalerFsr3   ? "FSR 3.1"
                 : s.upscaler == BbSettings::UpscalerFsr4 ? "FSR 4"
                 : s.upscaler == BbSettings::UpscalerFsr411 ? "FSR 4.1.1"
                 : s.upscaler == BbSettings::UpscalerTaa ? "TAA"
                 : s.upscaler == BbSettings::UpscalerDlss ? "DLSS"
-                                                         : "");
+                                                         : "",
+                dynamic);
     ImGui::End();
 }
 

@@ -83,6 +83,10 @@ inline constexpr int OutputDefault = 2; ///< 2560x1440 (index 1, 1920x1080, is t
 /// preset keeps the game's timing up to 120 FPS.
 inline constexpr int FrameLimits[] = {0, 30, 60, 90, 120};
 inline constexpr int FrameLimitCount = 5;
+/// render_scale: 5..200% in steps of 5.
+inline constexpr int RenderScaleMin = 5, RenderScaleMax = 200, RenderScaleStep = 5;
+/// The lowest dynamic resolution, percent of the output.
+inline constexpr int DynamicPercentMin = 25;
 
 struct Values {
     // Defaults: DLSS (FSR 3.1 where it is unavailable), Performance, CNN model, 4x generation.
@@ -121,6 +125,17 @@ struct Values {
     /// Window and input (on start): a maximised window; gamepads read while unfocused.
     std::atomic<bool> maximized{true};
     std::atomic<int> frame_limit{0}; ///< FPS, 0: display refresh rate (at most 120)
+    /// Render resolution in percent of the output for the modes without presets (upscaler off,
+    /// TAA): 5..200 in steps of 5; above 100 supersamples.
+    std::atomic<int> render_scale{100};
+    /// Dynamic resolution: while the GPU misses the frame rate target, the render resolution
+    /// drops in 5% steps (down to 25% of the output); it rises again while the GPU has
+    /// headroom, up to the preset's or render_scale's resolution.
+    std::atomic<bool> dynamic_resolution{false};
+    /// Set by the renderer: the dynamic resolution in percent of the output (0: not active),
+    /// and the GPU's busy time per rendered frame (ms, 0 before the first measurement).
+    std::atomic<int> dynamic_percent{0};
+    std::atomic<float> gpu_frame_ms{0.0f};
     std::atomic<bool> background_gamepad{true};
     /// Mouse cursor hidden after 500 ms without motion, or at once on gamepad input.
     std::atomic<bool> hide_cursor{true};
