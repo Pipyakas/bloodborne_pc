@@ -597,7 +597,9 @@ static void *toggle_watcher(void *path) {
     for (unsigned long long last=ULLONG_MAX;;) {
         FILE *f=fopen(path,"r");
         unsigned long long value=0;
-        if (f) { if (fscanf(f,"%llu",&value)!=1) value=0; fclose(f); }
+        char text[32]={0};
+        /* Decimal or 0x-prefixed hex: the GPU bits (32 and up) are easier to read in hex. */
+        if (f) { if (fgets(text,sizeof text,f)) value=strtoull(text,NULL,0); fclose(f); }
         if (value!=last) {
             __atomic_store_n(&runtime_disabled_optimizations,(uint64_t)value,__ATOMIC_RELEASE);
             printf("Runtime: disabled optimizations mask=%llu\n",value);

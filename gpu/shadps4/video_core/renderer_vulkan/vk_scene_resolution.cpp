@@ -85,11 +85,13 @@ bool SceneTargets::Eligible(const VideoCore::Image& image) const {
         i.props.is_block || !image.backing || image.backing->num_samples != 1) {
         return false;
     }
-    // Mip chains (the half-resolution bloom pyramid) stay native: its downsample passes ping-pong
-    // with smaller native images, and proxied levels cost a resolve at each hop. Native is
-    // 0.7-1.9 ms per frame faster at 1200 MHz (2026-10-06).
     if (i.resources.levels != 1) {
-        return false;
+        // The half-resolution bloom pyramid: only level 0 (its costly bright pass) is drawn
+        // reduced, 1.1-1.6 ms per frame faster than native at 1200 MHz. The downsample passes
+        // ping-pong with smaller native images, so reduced lower levels gain nothing (2026-10-06).
+        return !BbToggle::Disabled(BbToggle::SceneMipChains) && div == 2 &&
+               i.resources.levels <= 16 && !i.props.is_depth &&
+               Blittable(image.backing->image.image_ci.format);
     }
     return Blittable(image.backing->image.image_ci.format) || ShaderResampled(image);
 }
@@ -415,12 +417,14 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level, bool fi
     if (fill && !entry->state.valid) Copy(*entry, original, false);
     return *entry;
 }
-bool SceneTargets::ClearProxy(VideoCore::ImageId id, const vk::ClearColorValue& value) {
+bool SceneTargets::ClearProxy(VideoCore::ImageId id, const vk::ClearColorValue& value,
+                              const VideoCore::SubresourceRange& range) {
     if (!Reduced() || copying) {
         return false;
     }
     auto& image = *lookup(id, 0);
-    if (image.info.props.is_depth || !Eligible(image)) {
+    if (range.base.level != 0 || range.base.layer != 0 || range.extent.levels != 1 ||
+        range.extent.layers != 1 || image.info.props.is_depth || !Eligible(image)) {
         return false;
     }
     auto& e = Get(id, 0, false);
