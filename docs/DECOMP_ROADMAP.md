@@ -1,186 +1,151 @@
-# Decompilation roadmap
+# Bloodborne source-conversion roadmap
 
-Goal: Bloodborne (CUSA03173 v1.09) built from reconstructed C/C++ source instead of the PS4
-eboot, starting inside bbport and ending with an executable that no longer contains the
-original game code. This page is the plan; nothing below exists yet unless marked done.
+## Goal and current state
 
-## What we are up against (measured on the v1.09 eboot)
+Convert bbport from native execution of the PS4 game with a shadPS4-derived GPU
+translator into a **source-available Bloodborne implementation with portable
+platform backends**. Decompilation is part of this repository, not an isolated
+research branch. Windows usability remains a near-term product goal.
 
-| Fact | Value | Consequence |
-|---|---|---|
-| Executable segment | 84.8 MB (code + read-only data) | Large: comparable to a full modern AAA executable |
-| Functions | 162,959 (`.eh_frame_hdr` FDE table; fde_count at offset 8) | Function boundaries are known for free; many are tiny (thunks, templates, inlined STL leftovers) |
-| Compiler | Sony's Orbis clang from SDK 4.50 (`SYSTEM_VER` 0x04500000), not available to us | A *matching* (byte-identical) decomp is not realistic; target **functional equivalence** |
-| C++ RTTI | 209 type names, nearly all FMOD's | The game's own classes have no RTTI: layouts come from vtables, constructors and usage |
-| Middleware | Havok (physics `hkp*`, behavior `hkb*`), Scaleform GFx, FMOD Designer, Lua, zlib, libpng | A large share of the 163k functions is licensed middleware, not FromSoftware code |
-| Game code | Dantelion engine (DL*), FRPG game layer, EzState scripts | The part worth decompiling first |
-| System calls | 686 imports from 42 PS4 modules | Already provided by bbport's runtime and the shadPS4-derived renderer |
+"Build for any platform" is the architectural objective: compile the same game
+logic for a new CPU/OS by implementing its backend, rather than running the PS4
+x86-64 executable. It is not a promise of support for every device. Graphics,
+toolchain, platform restrictions and hardware capabilities still need validation.
 
-"Should not take that long with agents" holds for *writing* candidate source. It does not hold for
-*verifying* it: every function has to be shown to behave like the original, and the game's state
-is huge, multi-threaded and not deterministic. The plan is therefore built around verification
-throughput, not decompilation throughput.
+Today bbport still loads original game code and Sony modules, and translates GNM
+through the shadPS4-derived renderer. **No complete reconstructed game source,
+source-only game build or non-x86 game build has been demonstrated.**
 
-## Strategy: functional decomp by incremental replacement
+## Repository layout
 
-1. Keep running the original eboot in bbport (it already works).
-2. Decompile one function at a time into C/C++ under `decomp/`, compiled with the host clang for
-   the same x86-64 System V ABI the PS4 uses.
-3. At load time, redirect the original function's entry to the replacement (a 5- or 14-byte jump,
-   like the existing `patches.bin` writes). Each replacement can be switched off individually, so
-   a regression is bisected by toggling.
-4. Prove equivalence per function with differential tests (below), and per build with gameplay
-   regression routes.
-5. When the game's own code is fully replaced, stop loading the original executable segment:
-   the remaining data (`.rodata`, tables) becomes extracted assets, and middleware is either
-   decompiled too or kept as an isolated binary blob until last.
+- [`research/decomp/`](../research/decomp/README.md): curated evidence, hypotheses
+  and [research-to-source targets](../research/decomp/CONVERSION_TARGETS.md).
+- [`decomp/`](../decomp/README.md): intended reviewed source, interfaces, temporary
+  bridges and tests; currently documentation only, no admitted replacements.
+- [`tools/decomp/`](../tools/decomp/): existing inventory and Ghidra tooling.
+- `src/` and `gpu/`: current playable runtime/renderer, retained as the integration
+  and comparison environment while replacement coverage grows.
 
-Every intermediate state is a playable bbport, so progress is never all-or-nothing.
+Reviewed research and tooling can live on `master` without activating game code.
+Preserve existing unfinished task work; do not create new task branches or enable
+unverified replacements. Verified implementations can join `master` following
+the shared-checkout/playable-build workflow in `AGENTS.md`. The old
+`decomp` branch is a publication snapshot, not an architectural boundary.
 
-## Phases
+## Strategy: incremental replacement, then independence
 
-### Phase 0: infrastructure (first; ~2-3 weeks)
+1. Establish native capture/replay on d1 and a reliable original-game reference.
+2. Reconstruct bounded functions/subsystems, with temporary x86-64 System V ABI
+   bridges into the original game. Functional equivalence, not byte matching.
+3. Keep recovered logic separate from guest addresses, ABI structs and host APIs;
+   make data ownership and platform service contracts explicit.
+4. Verify replacements and integrate reversible switches while the original game
+   remains available for comparison. Remove a patch/hook only when its behavior
+   and consumers are covered.
+5. Replace executable middleware and system-module dependencies, and recover the
+   initialization/data contracts needed to stop loading original game code.
+6. Replace guest GNM generation/translation with a native rendering interface.
+   This is **required for the final goal**, not an optional postscript.
+7. Prove a standalone source build, then validate additional OS/CPU backends.
 
-Nothing else scales without this. Owner: Codex (strongest coding agent here), reviewed by
-Antigravity Gemini Pro.
+The original game dump remains the user's local asset source. Source availability
+does not imply redistribution of artwork, audio, maps or other game content.
 
-- **Function inventory** `decomp/inventory/functions.csv`: every FDE (start, size), its callers
-  and callees, referenced strings, imports used, middleware classification, status
-  (`binary` / `drafted` / `verified` / `replaced`). Regenerated by a script, never edited by hand.
-- **Disassembly/decompiler exports**: Ghidra headless (free) project of the eboot with the import
-  names applied; per-function pseudo-C and assembly dumps as the agents' starting point.
-- **Middleware identification**: signature/string matching for Havok, Scaleform, FMOD, Lua,
-  zlib, libpng; tag those functions so game-code work is not wasted on them.
-- **Replacement library** `bbdecomp.dll` built separately from bb-probe (so an agent rebuilds
-  seconds of code, not the GPU library's LTO link), loaded by bb-probe, with a redirect table and
-  a per-function on/off config.
-- **Differential test harness** (the core):
-  - *Capture*: an entry hook that records a function's arguments, the memory it reads and writes
-    and its return value during real play (bbport already has hardware-watchpoint and fault
-    infrastructure to build on). Stored as test vectors.
-  - *Replay*: a CPU-only runner that maps the game image, restores a captured state, runs the
-    original and the replacement and compares return values, memory writes and calls made. Runs
-    in parallel without the GPU.
-- **Gameplay regression**: recorded routes (`BB_PAD_REPLAY`) driven through the MCP control
-  channel, minimized and silent, checking that the game reaches the same checkpoints (log lines,
-  screenshots compared with a tolerance). Serialized behind the GPU benchmark lock: this laptop
-  has one 8 GB GPU.
-- **Work queue**: `decomp/queue/` task files (function ids, dependencies, assignee, status) that
-  agents claim through a lock, one git worktree per agent, merges into a `decomp` branch after the
-  harness passes.
+## Milestones and acceptance gates
 
-### Phase 1: types and data (~3-4 weeks, parallel with phase 2)
+### M0 — trustworthy verification infrastructure (in progress)
 
-- Global variable map, string tables, vtables and the classes they imply; constructor-driven
-  struct layouts; headers under `decomp/include/`.
-- Name recovery from assert/log strings, EzState and param table names (EquipParam, NpcParam,
-  ...), Dantelion naming conventions.
-- Owners: GPT-6.x (ccgw-k12) workers draft, Gemini Pro cross-checks.
+Existing tools: function inventory/call graph and Ghidra preparation/export.
+The measured v1.09 FDE table has 162,959 entries; these are not a count of verified
+game functions or reconstruction progress. Class and other notes are provisional.
 
-### Phase 2: leaves first (bottom-up through the call graph)
+Unfinished: Linux-native replacement registration, capture/replay and real-game
+leaf proof. Windows `CONTEXT` vectors are not native Linux vectors. d1 Vulkan
+enumeration works with RADV on its RX 6700 XT; use
+`VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json`. The NVIDIA card is
+intentionally CUDA-only. Enumeration is not proof that game capture works.
 
-- Functions that call nothing un-replaced: math, containers, strings, allocators' helpers.
-  Cheapest to verify (pure or nearly pure), highest volume.
-- Owners: Antigravity Gemini Flash and GPT-6.x workers in bulk; the free ccgw models only name
-  and classify functions, they do not land code without harness verification.
+Acceptance: original/replacement/independent expectations agree on fresh vectors;
+an injected incorrect implementation fails; unsupported ABI, platform, memory or
+execution cases are rejected, not silently skipped. Captures stay private.
 
-### Phase 3: game subsystems
+### M1 — evidence-backed types and portable leaves
 
-Ordered by where source removes the most patching and guessing today (survey of 2026-10-06):
+Recover signatures, layouts, ownership and side effects; start with bounded math,
+containers, strings and allocator helpers. Generated pseudo-C and candidate
+vtables are inputs for review, never automatically compiled source.
 
-1. **Frame timing**: every consumer of the frame time. Replaces the FPS++ patches (247-328
-   hand-found timestep sites each, animation replays when one is missed) and their limits
-   (movement breaks above ~120 FPS, Havok above 90). Small, mostly arithmetic functions: also the
-   harness's first real targets.
-2. **Renderer front-end**: camera, passes, per-object transforms, particles, UI. Replaces the GPU
-   side's heuristics (camera found by a far-plane signature, passes by render-target counts and
-   shader hashes, UI by its 1920x1080 size, skeletons by constant-buffer size, objects matched by
-   draw order) with real data for upscaling, motion vectors and frame generation.
-3. **Resolution and scene setup**: real render sizes and aspect ratios, light culling at the
-   real size (live scaling draws 8x the lights today), no heap-size patch or 1916x1078 trick.
-4. **Menus and options**: the hardcoded hooks of runtime_menu.c / runtime_effects.c become code;
-   the faulting Load Game / New Game / System launch shortcuts.
-5. **Game memory allocator**: the open map-load crash (`Guest fault 0x263b8e7`, a corrupted free
-   list).
-6. **Resource loading and registration** (DLFile, BND/DCX): the 40-350 ms loading stalls (partly).
-7. Then the rest: memory and threading, input, parameters and saves, EzState and AI, gameplay.
+Acceptance: differential and edge-case tests, explicit dependencies, no guest ABI
+in portable logic, and shareable synthetic tests that run without the game dump.
+Record verified functions separately from drafted or statically researched ones.
 
-The rendering front-end keeps emitting GNM command buffers (bbport's renderer translates them)
-until phase 6.
+### M2 — source-owned game/engine subsystems
 
-### Phase 4: middleware
+Priority targets: timing, renderer front-end data, resolution/scene setup, menus,
+allocator, resource loading, then threading, input, parameters/saves, animation,
+EzState/AI and gameplay. Use the target map rather than unrelated address lists.
 
-Decide per library: keep as binary (Havok is the largest and most intricate), replace with an
-equivalent (zlib, libpng, Lua have public sources of comparable versions), or decompile last.
+Acceptance: dependency-complete subsystem tests and repeatable gameplay routes;
+list exactly which binary patches/hooks are retired. Timing and performance
+claims need measurements; source reconstruction alone promises no FPS gain.
 
-### Phase 5: independence from the eboot
+### M3 — middleware and platform contracts
 
-When the game code is fully replaced: build without loading the original code segment; data
-becomes extracted assets; middleware blobs are the only binary code left (or none). Only then is
-it a source port.
+Inventory Havok, Scaleform, FMOD, Lua, zlib, libpng and system modules. Review
+licenses and compatible public-source implementations or replacements; establish
+asset-format, physics, animation, UI and audio behavior tests.
 
-### Phase 6 (optional): native renderer
+Binary middleware may serve as a temporary bridge but **cannot satisfy** the full
+source build or arbitrary-CPU goal. Build host files, threading, input, audio and
+graphics behind explicit interfaces; preserve save compatibility deliberately.
 
-Replace the GNM command generation in the decompiled renderer with a PC graphics API, dropping
-the shadPS4-derived translation layer.
+### M4 — standalone source game, no original executable
 
-## Agent roles (no Claude workers; Claude monitors)
+Acceptance: build/run without original eboot, linked executable images, Sony
+modules or proprietary executable middleware. Initialize globals, tables and
+registries from reviewed source or documented asset extraction. Demonstrate that
+there is no hidden code-loading fallback; retain an optional comparison build.
 
-| Role | Agent | Why |
-|---|---|---|
-| Infrastructure, harness, hard subsystems | Codex `gpt-5-6` | Strongest coding agent available |
-| Bulk decompilation, type recovery | OpenCode `ccgw-k12/gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-astra`, `gpt-5.6-*` | Capable, parallel; note several gpt-6.1-sol runs failed on 2026-10-06, so reliability is checked before scaling |
-| Bulk leaves, classification, Ghidra-driven chores | Antigravity `gemini-3.8-flash-*` | Fast and cheap |
-| Cross-review, design review | Antigravity `gemini-pro-agent` | Different model family from the authors |
-| Naming, labelling, summaries | OpenCode free `ccgw/*` (big-pickle, nemotron-3-ultra, ...) | Free; output is advisory only |
-| Monitor | Claude (this thread) | Dispatches tasks, tracks the queue and metrics, reviews merges, stops runaway agents; writes no decomp code |
+### M5 — native renderer, no shadPS4 translation dependency
 
-Rules:
-- A function is `verified` only when the harness passes on captured vectors; reviews do not
-  substitute for it.
-- Author and reviewer are always different providers.
-- Agents run in their own worktrees; only the monitor merges into `decomp`; `master` gets a
-  build only when gameplay regression passes, following AGENTS.md.
-- Game runs follow the silent/minimized rule and the GPU benchmark lock.
+Render from explicit scene/material/animation data through a native backend,
+rather than rebuilding a GNM stream and translating it. Recover shader/material
+semantics and review shader-source/extraction provenance as part of this work.
 
-## Kickoff (2026-10-06): functional, private, phase 0 plus pilot
+Acceptance: scene/HUD and motion correctness, resize/resource lifetime, multiple
+graphics settings and gameplay coverage; standalone build excludes the vendored
+GNM translator. Preserve attribution/licenses for any reused source.
 
-Decisions: functional equivalence; decompiled code and everything derived from the game binary
-stays private in a local repository (`C:\code\bbport-decomp`, never pushed); public tooling lands
-in this repository through the monitor.
+### M6 — demonstrated portability
 
-| Workstream | Agent | Output |
-|---|---|---|
-| Replacement DLL, redirects, capture/replay harness, queue | Codex gpt-5-6 | tooling branch `decomp-harness` |
-| Function inventory, call graph, middleware tags, pilot candidates | Antigravity gemini-pro-agent | tooling branch `decomp-inventory` |
-| Ghidra headless pipeline (portable install, per-function export) | Antigravity gemini-3.8-flash-high | tooling branch `decomp-ghidra` |
-| Target map 1: frame timing | OpenCode ccgw-k12/gpt-6.1-sol | private research |
-| Target map 2: renderer front-end | OpenCode ccgw-k12/gpt-6-sol | private research |
-| Target map 3+4: resolution/scene setup, menus and options | OpenCode ccgw-k12/gpt-6-astra | private research |
-| Target map 5: game allocator and the map-load crash | OpenCode ccgw-k12/gpt-5.6-sol | private research |
-| Module map from strings (asserts, source paths, names) | OpenCode ccgw/big-pickle | private research |
-| Middleware versions and public-source availability | Antigravity gemini-3.8-flash-medium | private research |
+Build/test on supported Windows and Linux configurations first; add another CPU
+architecture and other OS/graphics backends only when implemented and tested.
+Audit pointer width, alignment, endian assumptions, atomics, SIMD, serialization,
+calling conventions and exception behavior. Platform capability gaps must have
+explicit fallbacks or be reported unsupported.
 
-The pilot (bulk workers decompiling frame-timing leaves) starts when the harness verifies its
-first functions.
+Acceptance: publish exact tested OS/CPU/GPU/backend combinations and build
+instructions. A cross-compile alone is not a working game port.
 
-## Throughput and timeline (honest estimate)
+## Publication, placement and review
 
-- Phase 0: 2-3 weeks of mostly sequential infrastructure work.
-- After it, if ~10 agent workers each land ~50-100 verified small functions a day, the leaves
-  move fast, but larger functions (hundreds of instructions, many callees, shared state) take far
-  longer each, and gameplay regression is limited to one GPU.
-- Game code alone (excluding middleware) is likely well over 50k functions: **many months**, not weeks,
-  even with agents. First visible milestones: a subsystem (e.g. resource loading) fully replaced
-  and verified within ~1-2 months of starting phase 2.
+- Public: curated research, reviewed tooling and reconstructed implementations
+  with provenance/license review and honest validation status.
+- Private on d1: game binaries/assets/saves, memory captures, Ghidra projects,
+  bulk pseudo-C/disassembly and proprietary SDKs. GPL on the repository does not
+  establish redistribution rights for third-party game or middleware code.
+- All decomp workers and harness/runtime testing run on d1. Preserve Windows
+  snapshots; do not restart Windows decomp workers.
+- Eligible free `ccgw/*` research workers only, never `ccgw-k12/*` or GPT-6.1
+  workers/aliases. Read the live catalog and canonical d1 scorecard; cap fan-out
+  around three and independently verify results. This does not restrict the
+  user's selected main composer.
+- Record evidence and uncertainty, not model confidence. Review alone cannot
+  substitute for equivalence tests; synthetic tests alone cannot establish
+  real-game equivalence. Native implementations also need platform validation.
 
-Metrics the monitor reports: functions by status, verified per day per agent, harness failure
-rate, regression route results, agent failures/timeouts.
-
-## Decisions needed before starting
-
-1. **Functional vs matching**: this plan assumes functional (matching needs Sony's SDK 4.50 compiler).
-2. **Publishing**: decompiled source of a commercial game is legally riskier than bbport's
-   runtime. Keep `decomp/` in a private repository or branch until that is settled.
-3. **Budget**: the agent pool's quotas; the plan can start with Phase 0 only (one Codex worker
-   plus one reviewer).
+Track verified/replaced coverage, remaining binary dependencies, negative-test
+results, gameplay regressions and portable build coverage. No completion date or
+function-throughput estimate is established. A full source conversion is a large
+engineering effort; the first useful milestone is a verified replacement that
+actually removes an existing patch or runtime dependency.

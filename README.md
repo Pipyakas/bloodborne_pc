@@ -1,8 +1,10 @@
 # Pipyakas/bloodborne_pc — Windows-focused fork
 
-**Experimental reverse-engineering research notes:** Start with
-[the published research snapshot](research/decomp/README.md). This is separate
-from playable `master`, not a standalone decompiled game or a tested replacement build.
+**Long-term goal: a portable, source-available Bloodborne implementation.**
+Decomp work is part of this repository: [research](research/decomp/README.md),
+[source layout](decomp/README.md), and [conversion roadmap](docs/DECOMP_ROADMAP.md).
+The current playable build still needs the original x86-64 executable and the
+shadPS4-derived renderer; a full source build and arbitrary-platform support do not exist yet.
 
 **Start here: [Fork aims and release policy](README.fork.md).** Our primary target
 is a downloadable Windows executable release after every successful `master` push.

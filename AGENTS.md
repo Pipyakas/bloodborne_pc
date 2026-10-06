@@ -16,6 +16,12 @@
 
 - Curated experimental research notes are consolidated on `master`.
   See `research/decomp/README.md` for scope, provenance and limitations.
+- Decomp work must support the portable source-game conversion in
+  `docs/DECOMP_ROADMAP.md`. Link evidence to current code, replacement targets and
+  acceptance tests. Reviewed reconstructed source belongs under `decomp/`.
+- The final goal excludes the original executable, proprietary executable
+  middleware and shadPS4 GNM translation. Temporary bridges are not proof of a
+  full source build; do not claim support for untested platforms.
 - Do not publish game binaries/assets/saves, memory captures, Ghidra projects,
   bulk game-code exports or proprietary SDKs. Keep those inputs private on d1.
 - All decomp workers, harness development and decomp GPU/runtime testing belong

@@ -1,13 +1,19 @@
 # Bloodborne functional decompilation — experimental research
 
-This directory publishes the fork owner's curated reverse-engineering research
-alongside playable `master`. It is **not a standalone decompiled game**, and none of
-these notes makes a replacement function ready for integration.
+This directory is part of the main repository's source-conversion effort. It is
+**not a standalone decompiled game**, and none of these notes makes a replacement
+function ready for integration. The older `decomp` branch is a historical snapshot,
+not the required home for future work.
 
-The goal is incremental, behavior-tested function replacement inside bbport.
+The goal is a portable, source-available game implementation, reached through
+incremental, behavior-tested function replacement inside bbport and eventual
+removal of the original executable and shadPS4 translation dependency.
 See [the roadmap](../../docs/DECOMP_ROADMAP.md),
 [Ghidra workflow](../../docs/DECOMP_GHIDRA.md), and the reproducible
 [inventory tool](../../tools/decomp/inventory.py).
+Use the [conversion target map](CONVERSION_TARGETS.md) to connect these findings
+to current bbport code, proposed source boundaries and acceptance tests. Future
+reviewed implementation belongs under [`decomp/`](../../decomp/README.md).
 
 ## Published snapshot
 

@@ -1,9 +1,11 @@
 # Pipyakas/bloodborne_pc — Windows-focused bbport fork
 
 This fork builds on [deadinside28/bloodborne_pc](https://github.com/deadinside28/bloodborne_pc)
-and the shared Windows-port work. It is not a rewrite of Bloodborne or a general
-PS4 emulator: the original game executable runs through a game-specific runtime,
-with a Vulkan renderer derived from shadPS4.
+and the shared Windows-port work. Today the original game executable runs through
+a game-specific runtime with a Vulkan renderer derived from shadPS4; this is not
+a general PS4 emulator. The long-term goal is to reconstruct a source-available
+Bloodborne implementation with portable platform backends, replacing the original
+executable and eventually the shadPS4 translation path.
 
 The [main README](README.md) contains the inherited technical background and
 build instructions. This page defines **this fork's aims and release policy**, so
@@ -41,6 +43,11 @@ The intended automation must:
 
 ## What distinguishes this fork
 
+- **Source conversion:** curated [decomp research](research/decomp/README.md),
+  verification tools and future reconstructed source live inside this repository.
+  The [roadmap](docs/DECOMP_ROADMAP.md) connects findings to replacements for
+  binary patches, game subsystems, middleware and platform-specific execution.
+  Portability is a design requirement, not a claim that today's build runs on any platform.
 - **Windows usability:** a native Windows build, setup/launch tools, native-menu
   integration and controller/input improvements. The aim is a streamlined
   "executable + your .pkg files -> working game": the setup program installs the
@@ -53,8 +60,9 @@ The intended automation must:
   taking desktop focus. Agent launches default to minimized, silent windows so
   running instances remain visible in the taskbar.
 - **Publish completed work:** tested changes are committed, integrated into
-  `master`, built locally and pushed to this fork. Unfinished experiments are
-  published on clearly labeled task branches, not passed off as ready master builds.
+  `master`, built locally and pushed to this fork. Preserve unfinished experiments
+  without enabling or presenting them as ready master builds; ongoing port work
+  follows the master-only workflow in `AGENTS.md`.
 
 ## Relationship to upstream
 
