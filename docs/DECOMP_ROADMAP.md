@@ -86,10 +86,27 @@ Antigravity Gemini Pro.
 
 ### Phase 3: game subsystems
 
-In order of risk and payoff: file and resource loading (DLFile, BND/DCX archives) -> memory and
-threading -> input and menus (Scaleform glue) -> parameters and save data -> EzState and AI ->
-gameplay (combat, physics glue) -> rendering front-end (still emitting GNM command buffers, which
-bbport's renderer translates).
+Ordered by where source removes the most patching and guessing today (survey of 2026-10-06):
+
+1. **Frame timing**: every consumer of the frame time. Replaces the FPS++ patches (247-328
+   hand-found timestep sites each, animation replays when one is missed) and their limits
+   (movement breaks above ~120 FPS, Havok above 90). Small, mostly arithmetic functions: also the
+   harness's first real targets.
+2. **Renderer front-end**: camera, passes, per-object transforms, particles, UI. Replaces the GPU
+   side's heuristics (camera found by a far-plane signature, passes by render-target counts and
+   shader hashes, UI by its 1920x1080 size, skeletons by constant-buffer size, objects matched by
+   draw order) with real data for upscaling, motion vectors and frame generation.
+3. **Resolution and scene setup**: real render sizes and aspect ratios, light culling at the
+   real size (live scaling draws 8x the lights today), no heap-size patch or 1916x1078 trick.
+4. **Menus and options**: the hardcoded hooks of runtime_menu.c / runtime_effects.c become code;
+   the faulting Load Game / New Game / System launch shortcuts.
+5. **Game memory allocator**: the open map-load crash (`Guest fault 0x263b8e7`, a corrupted free
+   list).
+6. **Resource loading and registration** (DLFile, BND/DCX): the 40-350 ms loading stalls (partly).
+7. Then the rest: memory and threading, input, parameters and saves, EzState and AI, gameplay.
+
+The rendering front-end keeps emitting GNM command buffers (bbport's renderer translates them)
+until phase 6.
 
 ### Phase 4: middleware
 
@@ -125,6 +142,27 @@ Rules:
 - Agents run in their own worktrees; only the monitor merges into `decomp`; `master` gets a
   build only when gameplay regression passes, following AGENTS.md.
 - Game runs follow the silent/minimized rule and the GPU benchmark lock.
+
+## Kickoff (2026-10-06): functional, private, phase 0 plus pilot
+
+Decisions: functional equivalence; decompiled code and everything derived from the game binary
+stays private in a local repository (`C:\code\bbport-decomp`, never pushed); public tooling lands
+in this repository through the monitor.
+
+| Workstream | Agent | Output |
+|---|---|---|
+| Replacement DLL, redirects, capture/replay harness, queue | Codex gpt-5-6 | tooling branch `decomp-harness` |
+| Function inventory, call graph, middleware tags, pilot candidates | Antigravity gemini-pro-agent | tooling branch `decomp-inventory` |
+| Ghidra headless pipeline (portable install, per-function export) | Antigravity gemini-3.8-flash-high | tooling branch `decomp-ghidra` |
+| Target map 1: frame timing | OpenCode ccgw-k12/gpt-6.1-sol | private research |
+| Target map 2: renderer front-end | OpenCode ccgw-k12/gpt-6-sol | private research |
+| Target map 3+4: resolution/scene setup, menus and options | OpenCode ccgw-k12/gpt-6-astra | private research |
+| Target map 5: game allocator and the map-load crash | OpenCode ccgw-k12/gpt-5.6-sol | private research |
+| Module map from strings (asserts, source paths, names) | OpenCode ccgw/big-pickle | private research |
+| Middleware versions and public-source availability | Antigravity gemini-3.8-flash-medium | private research |
+
+The pilot (bulk workers decompiling frame-timing leaves) starts when the harness verifies its
+first functions.
 
 ## Throughput and timeline (honest estimate)
 
