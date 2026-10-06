@@ -17,5 +17,7 @@ void Apply(bool choices);
 void WatchDropdown(const BbNativeSetting* row, const volatile uint8_t* open);
 /// The screen closed: its widgets' bytes are no longer read.
 void ForgetDropdowns();
+/// The button the port presses on this pad read (bbgpu_native_menu_press).
+int MenuPress();
 
 } // namespace BbNative

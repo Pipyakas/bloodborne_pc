@@ -110,6 +110,8 @@ struct Values {
     std::atomic<int> active_render_width{1920}, active_render_height{1080};
     /// The temporal upscaler ran on the last frame (menus and loading screens skip it).
     std::atomic<bool> upscaler_ran{false};
+    /// The last frame drew the 3D scene (not a menu or loading screen).
+    std::atomic<bool> scene_frame{false};
     /// Applied at start (patches.py); the menu shows when a restart is needed.
     std::atomic<bool> effects[EffectCount]{};
     std::atomic<int> model_lod{0}; ///< -2 highest .. 2 lowest, 0 the game's

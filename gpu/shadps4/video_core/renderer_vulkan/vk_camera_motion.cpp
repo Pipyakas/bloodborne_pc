@@ -249,6 +249,7 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
         Overlay(frame);
     }
     if (!frame_has_camera) InvalidateHistory();
+    last_frame_had_camera = frame_has_camera;
     frame_has_camera = false;
     depth_id = {};
 }
