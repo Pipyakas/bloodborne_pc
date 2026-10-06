@@ -337,6 +337,7 @@ bool TemporalUpscaler::OnFrameStart() {
                                     : SceneResolution::ForPreset(preset, output);
         max_render_width = max_render.width;
         max_render_height = max_render.height;
+        scene_targets.SetMaxSize(max_render);
         if (changed) drs_useful_floor = 0; // another configuration: probe again
         const int dynamic = UpdateDynamicResolution(
             base_percent, upscaler == BbSettings::UpscalerDlss ? dlss_floor_percent
@@ -348,7 +349,9 @@ bool TemporalUpscaler::OnFrameStart() {
     }
     BbSettings::Get().active_render_width = Scaled() ? render_width : scene_targets.Size().width;
     BbSettings::Get().active_render_height = Scaled() ? render_height : scene_targets.Size().height;
-    if (changed || resized || !dispatched_last_frame) reset = true;
+    // A dynamic resolution step keeps the upscalers' history (output size), not TAA's.
+    if (changed || (resized && upscaler == BbSettings::UpscalerTaa) || !dispatched_last_frame)
+        reset = true;
     if (changed || resized) jitter_index = 0;
     applied_preset = preset;
     applied_output = output;
@@ -452,9 +455,12 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
     } else if (gpu_bound && (frame_ms > target_ms * 1.05 || gpu_ms > target_ms * 0.95) &&
                since_change >= 1.0 && current > floor) {
         // GPU time grows with the pixel count (percent squared) plus fixed costs: aim at 85%
-        // of the target in one step, in 5% steps.
+        // of the target, in 5% steps, at most 10 per step (20 when far over) so the change in
+        // sharpness stays gradual.
         const double fit = current * std::sqrt(0.85 * target_ms / gpu_ms);
-        next = std::clamp(int(fit) / 5 * 5, floor, std::max(floor, (current - 1) / 5 * 5));
+        const int largest_step = gpu_ms > target_ms * 1.5 ? 20 : 10;
+        next = std::clamp(int(fit) / 5 * 5, std::max(floor, current - largest_step),
+                          std::max(floor, (current - 1) / 5 * 5));
         if (next < current) {
             drs_lowered_from = current;
             drs_lowered_gpu_ms = gpu_ms;
@@ -509,12 +515,22 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
         return true;
     }
     const auto device = instance.GetDevice();
-    // FSR 4 owns no portable FSR 3 context, but its images can still be in flight.
-    scheduler.Finish();
-    resources_ready = false;
-    if (context) {
-        ffxVkPortableUpscaleContextDestroy(context);
-        context = nullptr;
+    // The FSR 3 context takes render sizes up to its maximum (the preset's or dynamic
+    // resolution's largest): a dynamic resolution step keeps it, and replaces only the images
+    // below, freed once the GPU is done with them (no stall). Anything else rebuilds it.
+    const u32 max_w = std::max(w, max_render_width), max_h = std::max(h, max_render_height);
+    const bool rebuild = !resources_ready || ow != out_width || oh != out_height ||
+                         hdr != context_hdr || use_fsr4 != resources_fsr4 ||
+                         use_taa != resources_taa ||
+                         (context && (w > context_width || h > context_height));
+    if (rebuild) {
+        // FSR 4 owns no portable FSR 3 context, but its images can still be in flight.
+        scheduler.Finish();
+        resources_ready = false;
+        if (context) {
+            ffxVkPortableUpscaleContextDestroy(context);
+            context = nullptr;
+        }
     }
     width = w;
     height = h;
@@ -541,10 +557,12 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     create_info.flags = hdr ? FFX_VK_PORTABLE_CONTEXT_HDR_COLOR_INPUT |
                                   FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE
                             : 0;
-    create_info.maxRenderSize = {w, h};
+    create_info.maxRenderSize = {max_w, max_h};
     create_info.maxOutputSize = {ow, oh};
     // FSR 4 has its own model context (vk_fsr4); the images below are shared.
-    if (!use_fsr4 && !use_taa) {
+    if (rebuild && !use_fsr4 && !use_taa) {
+        context_width = max_w;
+        context_height = max_h;
         if (const u64 issues = ffxVkPortableValidateUpscaleCreateInfo(&create_info)) {
             PrintIssues("create info", issues);
             return false;
@@ -627,6 +645,21 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
             .subresourceRange = {aspect, 0, 1, 0, 1},
         }));
     };
+    struct Retired {
+        std::vector<VideoCore::UniqueImage> images;
+        std::vector<vk::UniqueImageView> views; // destroyed first
+    } retired;
+    const auto retire = [&](VideoCore::UniqueImage& image, vk::UniqueImageView& view) {
+        if (view) retired.views.push_back(std::move(view));
+        if (image) retired.images.push_back(std::move(image));
+    };
+    retire(opaque_image, opaque_view);
+    retire(reactive_image, reactive_view);
+    for (u32 i = 0; i < taa_history.size(); ++i) retire(taa_history[i], taa_history_views[i]);
+    retire(taa_scaled_image, taa_scaled_view);
+    if (!retired.images.empty()) {
+        scheduler.DeferOperation([old = std::move(retired)]() mutable {});
+    }
     make_image(opaque_image, opaque_view, vk::Format::eR16G16B16A16Sfloat,
                vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst |
                    vk::ImageUsageFlagBits::eTransferSrc);
@@ -652,7 +685,9 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     taa_next = 0;
     CreatePipelines();
     opaque_valid = false;
-    reset = true;
+    // DLSS and FSR keep their history (at the output size) across a render size change; TAA's
+    // is at the render size.
+    if (rebuild || use_taa) reset = true;
     resources_ready = true;
     resources_fsr4 = use_fsr4;
     resources_taa = use_taa;
