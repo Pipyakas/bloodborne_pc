@@ -395,7 +395,7 @@ void Menu() {
         ImGui::SameLine();
         Checkbox("Dynamic", s.dynamic_resolution);
         Hint("Dynamic: while the GPU cannot reach the frame rate limit, the scene's render resolution "
-             "drops in 5% steps; it rises again while the GPU has headroom, up to 100% of the "
+             "drops in steps of 1% or more; it rises again while the GPU has headroom, up to 100% of the "
              "output. It stops lowering when the CPU limits the frame rate, or when a step no "
              "longer saves GPU time. Each change is a short pause." " A render resolution above 100% stays the top.");
     }
@@ -433,7 +433,7 @@ void Menu() {
             ImGui::EndCombo();
         }
         Hint("Dynamic: while the GPU cannot reach the frame rate limit, the scene's render resolution "
-                 "drops in 5% steps; it rises again while the GPU has headroom, up to 100% of the "
+                 "drops in steps of 1% or more; it rises again while the GPU has headroom, up to 100% of the "
                  "output. It stops lowering when the CPU limits the frame rate, or when a step no "
                  "longer saves GPU time. Each change is a short pause.");
     }

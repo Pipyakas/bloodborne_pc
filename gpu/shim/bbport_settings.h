@@ -129,7 +129,7 @@ struct Values {
     /// TAA): 5..200 in steps of 5; above 100 supersamples.
     std::atomic<int> render_scale{100};
     /// Dynamic resolution, replacing the preset (or a render_scale below 100): while the GPU
-    /// misses the frame rate target, the render resolution drops in 5% steps until the CPU
+    /// misses the frame rate target, the render resolution drops (1% steps or more) until the CPU
     /// limits the frame rate (or a step saves no GPU time); it rises again while the GPU has
     /// headroom, up to 100% of the output (render_scale above 100: that).
     std::atomic<bool> dynamic_resolution{false};
