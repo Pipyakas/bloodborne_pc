@@ -434,7 +434,10 @@ struct DlssUpscaler::Impl {
         // holds the render size (the preset's first; DLAA has none), its feature created at
         // the range's maximum so the render size can move within it. Without the query,
         // a feature of exactly the render size.
-        int quality = Quality(f.preset);
+        // At the output size (dynamic resolution at 100%): anti-aliasing only (DLAA).
+        int quality = f.render_width == f.output.width && f.render_height == f.output.height
+                          ? int(Dlaa)
+                          : Quality(f.preset);
         u32 feature_width = f.render_width, feature_height = f.render_height;
         if (f.max_render_width > f.render_width || f.max_render_height > f.render_height) {
             for (const int q : {quality, int(MaxQuality), int(Balanced), int(MaxPerf),

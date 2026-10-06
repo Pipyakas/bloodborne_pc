@@ -198,6 +198,14 @@ private:
     u64 drs_busy_ns = 0;
     u32 drs_frames = 0;
     u32 drs_reports = 0; ///< windows evaluated (a status line every 5 s)
+    /// The lowest dynamic resolution DLSS accepted: raised when a feature for a smaller
+    /// render size cannot be created (percent of the output).
+    int dlss_floor_percent = 5;
+    bool drs_settle = false;     ///< skip the window after a change (its resize pause)
+    int drs_lowered_from = 0;    ///< the percent before the last step down, until measured
+    double drs_lowered_gpu_ms = 0.0;
+    int drs_useful_floor = 0;    ///< lowering below stopped paying off (for 30 s)
+    std::chrono::steady_clock::time_point drs_useful_floor_at{};
     bool drs_raised = false; ///< the last change was a step up
     int drs_blocked = 0;     ///< a step up that was undone soon after, not retried for 15 s
     std::chrono::steady_clock::time_point drs_blocked_at{};

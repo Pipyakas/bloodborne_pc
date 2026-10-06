@@ -85,8 +85,6 @@ inline constexpr int FrameLimits[] = {0, 30, 60, 90, 120};
 inline constexpr int FrameLimitCount = 5;
 /// render_scale: 5..200% in steps of 5.
 inline constexpr int RenderScaleMin = 5, RenderScaleMax = 200, RenderScaleStep = 5;
-/// The lowest dynamic resolution, percent of the output.
-inline constexpr int DynamicPercentMin = 25;
 
 struct Values {
     // Defaults: DLSS (FSR 3.1 where it is unavailable), Performance, CNN model, 4x generation.
@@ -128,9 +126,10 @@ struct Values {
     /// Render resolution in percent of the output for the modes without presets (upscaler off,
     /// TAA): 5..200 in steps of 5; above 100 supersamples.
     std::atomic<int> render_scale{100};
-    /// Dynamic resolution: while the GPU misses the frame rate target, the render resolution
-    /// drops in 5% steps (down to 25% of the output); it rises again while the GPU has
-    /// headroom, up to the preset's or render_scale's resolution.
+    /// Dynamic resolution, replacing the preset (or a render_scale below 100): while the GPU
+    /// misses the frame rate target, the render resolution drops in 5% steps until the CPU
+    /// limits the frame rate (or a step saves no GPU time); it rises again while the GPU has
+    /// headroom, up to 100% of the output (render_scale above 100: that).
     std::atomic<bool> dynamic_resolution{false};
     /// Set by the renderer: the dynamic resolution in percent of the output (0: not active),
     /// and the GPU's busy time per rendered frame (ms, 0 before the first measurement).
