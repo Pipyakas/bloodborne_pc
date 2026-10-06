@@ -66,8 +66,10 @@ const char16_t* const UpscalerLabels[BbSettings::UpscalerCount] = {
     u"Off", u"FSR 3.1", u"FSR 4", u"FSR 4.1.1", u"TAA", u"DLSS"};
 std::array<const char16_t*, BbSettings::UpscalerCount> upscaler_labels{};
 
+// The presets, then Dynamic (dynamic_resolution: it replaces the preset's fixed size).
 const char16_t* const PresetLabels[] = {u"Native", u"Quality", u"Balanced", u"Performance",
-                                        u"Ultra Performance"};
+                                        u"Ultra Performance", u"Dynamic"};
+static_assert(std::size(PresetLabels) == BbSettings::PresetCount + 1);
 const char16_t* const OutputLabels[] = {u"1280 x 720", u"1920 x 1080", u"2560 x 1440",
                                         u"3840 x 2160"};
 // Screen mode: the "fullscreen" and "maximized" settings (fullscreen wins).
@@ -106,9 +108,11 @@ const auto render_scale_text = [] {
     }
     return text;
 }();
+// The percentages, then Dynamic (31 entries).
 const auto render_scale_labels = [] {
-    std::array<const char16_t*, RenderScaleCount> labels{};
+    std::array<const char16_t*, RenderScaleCount + 1> labels{};
     for (int i = 0; i < RenderScaleCount; ++i) labels[i] = render_scale_text[i].c_str();
+    labels[RenderScaleCount] = u"Dynamic";
     return labels;
 }();
 
@@ -151,10 +155,6 @@ const Row rows[] = {
          v.frame_limit = BbSettings::FrameLimits[std::clamp(i, 0, BbSettings::FrameLimitCount - 1)];
      },
      0, [](const char16_t* const** out) { return Labels(FrameLimitLabels, out); }},
-    {BB_NATIVE_SCREEN, u"Dynamic resolution",
-     u"Lowers the render resolution while the GPU misses the frame rate limit; raises it again with headroom.",
-     Toggle, [](const Values& v) { return v.dynamic_resolution ? 1 : 0; },
-     [](Values& v, int on) { v.dynamic_resolution = on != 0; }, 0},
     {BB_NATIVE_SCREEN, u"Frame rate counter", u"Frame rate and frame time in a corner of the screen.",
      Toggle, [](const Values& v) { return v.show_fps ? 1 : 0; },
      [](Values& v, int on) { v.show_fps = on != 0; }, 0},
@@ -183,22 +183,32 @@ const Row rows[] = {
          *out = upscaler_labels.data();
          return upscaler_count;
      }},
-    {BB_NATIVE_UPSCALING, u"Upscaling quality", u"Render resolution: Native renders at the output resolution.",
-     Choice, [](const Values& v) { return v.preset.load(); },
-     [](Values& v, int i) { v.preset = std::clamp(i, 0, BbSettings::PresetCount - 1); },
+    {BB_NATIVE_UPSCALING, u"Upscaling quality",
+     u"Native renders at the output resolution. Dynamic lowers it while the GPU misses the frame rate limit.",
+     Choice,
+     [](const Values& v) { return v.dynamic_resolution ? BbSettings::PresetCount : v.preset.load(); },
+     [](Values& v, int i) {
+         v.dynamic_resolution = i >= BbSettings::PresetCount;
+         if (i < BbSettings::PresetCount) v.preset = std::max(i, 0);
+     },
      BbSettings::Performance, [](const char16_t* const** out) { return Labels(PresetLabels, out); },
      [](const Values& v) { return HasPresets(v); }},
     // The screen has five row slots: this row takes the quality row's place with upscaling off
     // or TAA (which row shows is decided when the screen opens).
     {BB_NATIVE_UPSCALING, u"Render resolution",
-     u"With upscaling off or TAA: percent of the output resolution the scene renders at. Above 100% supersamples.",
+     u"Percent of the output resolution (above 100% supersamples). Dynamic follows the frame rate limit.",
      Choice,
-     [](const Values& v) { return RenderScaleIndex(v.render_scale); },
-     [](Values& v, int i) { v.render_scale = RenderScaleValue(std::clamp(i, 0, RenderScaleCount - 1)); },
+     [](const Values& v) {
+         return v.dynamic_resolution ? RenderScaleCount : RenderScaleIndex(v.render_scale);
+     },
+     [](Values& v, int i) {
+         v.dynamic_resolution = i >= RenderScaleCount;
+         if (i < RenderScaleCount) v.render_scale = RenderScaleValue(std::max(i, 0));
+     },
      RenderScaleIndex(100),
      [](const char16_t* const** out) {
          *out = render_scale_labels.data();
-         return RenderScaleCount;
+         return RenderScaleCount + 1;
      },
      [](const Values& v) { return !HasPresets(v); }},
     {BB_NATIVE_UPSCALING, u"DLSS model", u"DLSS 3 CNN is the lightest; the transformer models are sharper and heavier.",
@@ -359,7 +369,7 @@ extern "C" const uint16_t* bbgpu_native_screen_text(int32_t screen, int32_t whic
         {u"Screen", u"Screen mode, resolution and frame rate."},
         {u"Advanced options", u"Motion blur, depth of field and other effects."},
         {u"Upscaling", u"Upscaler, render resolution and sharpening."},
-        {u"Graphics", u"Screen, graphics quality and upscaling."},
+        {u"Graphics", u"Screen, upscaling and graphics effects."},
     };
     return reinterpret_cast<const uint16_t*>(texts[std::clamp(int(screen), 0, int(BB_NATIVE_SCREENS))][which & 1]);
 }

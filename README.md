@@ -297,7 +297,8 @@ RTX 20/30 the transformer models are noticeably heavier than on RTX 40/50.
 **Render resolution and dynamic resolution:** with the upscaler off or TAA (no presets),
 `render_scale=5..200` (menu: *Render resolution*, steps of 5) renders the scene at that percent of
 the output and scales it to the output under full-resolution HUD; above 100 it supersamples.
-`dynamic_resolution=1` (menu: *Dynamic resolution*) replaces the preset: it lowers the render
+`dynamic_resolution=1` (menu: *Dynamic*, the last entry of *Upscaling quality* or *Render
+resolution*) replaces the preset: it lowers the render
 resolution in 5% steps while the GPU misses the frame rate limit (or is within 5% of it), until the
 CPU limits the frame rate or a step no longer saves GPU time (under a tenth of what its pixel count
 predicts: the remaining work is the upscaler and HUD at output size, shadows), and raises it again
