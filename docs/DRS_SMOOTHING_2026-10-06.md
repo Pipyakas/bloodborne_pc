@@ -35,6 +35,12 @@ This change:
   - Both reached gameplay. Candidate screenshots retained a correctly composed
     scene/HUD, and no assertion or Vulkan validation error was observed.
   - Original settings/saves hashed unchanged; test instances stopped afterward.
+- Integrated playable-checkout build and both unit tests passed. Two consecutive
+  integrated 4K DLSS gameplay runs seeded at 50%, exercised one-point transitions,
+  and completed the full smoke test with settings/saves unchanged. An earlier
+  integrated attempt lost its control connection partway through, without a
+  crash diagnostic in the game log; its cause remains unresolved. These short
+  repeat runs are not a long-session stability guarantee.
 
 These tests verify transition magnitude and basic runtime correctness, not
 imperceptibility in every scene or an FPS improvement. Smooth transitions respond
