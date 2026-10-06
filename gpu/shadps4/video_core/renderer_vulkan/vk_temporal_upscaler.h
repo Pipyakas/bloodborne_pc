@@ -185,6 +185,7 @@ private:
     CameraMotion& camera_motion;
     SceneTargets& scene_targets;
     int applied_preset = -1;
+    float applied_render_percent = -1.0f;
     int applied_upscaler = -1;
     bool dispatched_last_frame = false;
     bool last_active = false, last_jitter = false;

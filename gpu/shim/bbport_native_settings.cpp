@@ -65,8 +65,6 @@ const char16_t* const UpscalerLabels[BbSettings::UpscalerCount] = {
     u"Off", u"FSR 3.1", u"FSR 4", u"FSR 4.1.1", u"TAA", u"DLSS"};
 std::array<const char16_t*, BbSettings::UpscalerCount> upscaler_labels{};
 
-const char16_t* const PresetLabels[] = {u"Native", u"Quality", u"Balanced", u"Performance",
-                                        u"Ultra Performance"};
 const char16_t* const OutputLabels[] = {u"1280 x 720", u"1920 x 1080", u"2560 x 1440",
                                         u"3840 x 2160"};
 // Screen mode: the "fullscreen" and "maximized" settings (fullscreen wins).
@@ -145,10 +143,14 @@ const Row rows[] = {
          *out = upscaler_labels.data();
          return upscaler_count;
      }},
-    {BB_NATIVE_UPSCALING, u"Upscaling quality", u"Render resolution: Native renders at the output resolution.",
-     Choice, [](const Values& v) { return v.preset.load(); },
-     [](Values& v, int i) { v.preset = std::clamp(i, 0, BbSettings::PresetCount - 1); },
-     BbSettings::Performance, [](const char16_t* const** out) { return Labels(PresetLabels, out); }},
+    {BB_NATIVE_UPSCALING, u"Render resolution (50-100%)",
+      u"Scale of output resolution: 0 is 50%, 10 is 100%, each step is 5%. Applies immediately with FSR or DLSS. Off and TAA render at 100%.",
+      Slider, [](const Values& v) {
+          const float percent = v.render_percent ? float(v.render_percent.load()) :
+              100.0f / BbSettings::PresetScale(v.preset);
+          return std::clamp(int(std::lround((percent - 50.0f) / 5.0f)), 0, 10);
+      },
+      [](Values& v, int i) { v.render_percent = 50 + std::clamp(i, 0, 10) * 5; }, 0},
     {BB_NATIVE_UPSCALING, u"DLSS model", u"DLSS 3 CNN is the lightest; the transformer models are sharper and heavier.",
      Choice, [](const Values& v) { return v.dlss_model.load(); },
      [](Values& v, int i) { v.dlss_model = std::clamp(i, 0, BbSettings::DlssModelCount - 1); }, 1,
