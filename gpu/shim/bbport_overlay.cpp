@@ -636,8 +636,11 @@ void FpsCounter() {
         ImGui::End();
         return;
     }
+    // The upscaler's name only while it runs: 2D menus and loading screens are presented as
+    // drawn, scaled to the window without it.
     ImGui::Text("%.0f FPS  %.1f ms  %s", fps, frame_ms_avg,
-                s.upscaler == BbSettings::UpscalerFsr3   ? "FSR 3.1"
+                !s.upscaler_ran                          ? ""
+                : s.upscaler == BbSettings::UpscalerFsr3   ? "FSR 3.1"
                 : s.upscaler == BbSettings::UpscalerFsr4 ? "FSR 4"
                 : s.upscaler == BbSettings::UpscalerFsr411 ? "FSR 4.1.1"
                 : s.upscaler == BbSettings::UpscalerTaa ? "TAA"
