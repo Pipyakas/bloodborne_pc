@@ -80,6 +80,7 @@ if [[ -n ${scaled_output:-} ]]; then
             [[ $line =~ ^live_resolution=([01]|auto)$ ]] && live=${BASH_REMATCH[1]}
         done < "$BB_CONFIG"
     fi
+    live=${live:-auto} # default: live changes on GPUs that afford them
     if [[ $live == auto ]]; then
         if [[ -n ${BB_PROBE:-} ]]; then caps=$(dirname -- "$BB_PROBE")/bb-gpu-capabilities
         elif [[ -n ${BB_PREBUILT:-} ]]; then caps=bin/bb-gpu-capabilities

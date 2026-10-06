@@ -111,11 +111,24 @@ public:
         const u32 slot = reason < NumReasons ? reason : ReasonRasterizer;
         ++drains_by_reason[slot];
         const u64 start = __rdtsc();
-        for (u32 spins = 0; consumed.load(std::memory_order_acquire) != head; ++spins) {
+        // bbport: spin briefly, then block until stage B reaches the head. Stage B may wait
+        // milliseconds for the GPU (the frame bound); yielding through that kept this thread at
+        // ~100% of a core, power a laptop's GPU shares (Windows profile, 2026-10-05).
+        for (u32 spins = 0;; ++spins) {
+            const u64 seen = consumed.load(std::memory_order_acquire);
+            if (seen == head) {
+                break;
+            }
             if (spins < 4096) {
                 __builtin_ia32_pause();
-            } else {
+            } else if (spins < 4096 + 64 || YieldDrain()) {
                 std::this_thread::yield();
+            } else {
+                drain_target.store(head, std::memory_order_seq_cst);
+                if (consumed.load(std::memory_order_seq_cst) == seen) {
+                    WaitChange(seen);
+                }
+                drain_target.store(0, std::memory_order_relaxed);
             }
         }
         const u64 waited = __rdtsc() - start;
@@ -196,15 +209,44 @@ private:
             const auto* header = reinterpret_cast<const Header*>(ring.get() + at % Capacity);
             if (header->size == 0) {
                 at += Capacity - at % Capacity;
-                consumed.store(at, std::memory_order_release);
+                Consumed(at);
                 continue;
             }
             const u64 start = __rdtsc();
             handler(context, reinterpret_cast<const u8*>(header + 1), header->payload);
             busy_cycles.fetch_add(__rdtsc() - start, std::memory_order_relaxed);
             at += header->size;
-            consumed.store(at, std::memory_order_release);
+            Consumed(at);
         }
+    }
+
+    /// Stage B: publishes progress and wakes stage A once its Drain() target is reached.
+    void Consumed(u64 at) {
+        consumed.store(at, std::memory_order_seq_cst);
+        if (const u64 target = drain_target.load(std::memory_order_seq_cst);
+            target && at >= target) {
+#ifdef _WIN32
+            BbPlatform::WakeOne(static_cast<void*>(&consumed));
+#else
+            consumed.notify_one();
+#endif
+        }
+    }
+
+    /// BB_DRAIN_YIELD=1: the old drain wait (yield until stage B is done), for A/B runs.
+    static bool YieldDrain() {
+        static const bool yield = std::getenv("BB_DRAIN_YIELD") != nullptr;
+        return yield;
+    }
+
+    /// Stage A: sleeps until `consumed` differs from `seen` (or spuriously). On Windows
+    /// WaitOnAddress: libc++'s atomic wait there polls with sleeps (milliseconds late).
+    void WaitChange(u64 seen) {
+#ifdef _WIN32
+        BbPlatform::WaitOnValue(&consumed, seen);
+#else
+        consumed.wait(seen, std::memory_order_seq_cst);
+#endif
     }
 
     static inline thread_local bool on_stage_b = false;
@@ -216,6 +258,7 @@ private:
     alignas(64) std::atomic<u64> published{0};
     alignas(64) std::atomic<u64> consumed{0};
     alignas(64) std::atomic<u32> wake{0};
+    alignas(64) std::atomic<u64> drain_target{0}; ///< stage A blocks in Drain() for this head
     std::atomic<bool> sleeping{false};
     std::atomic<u32> stage_b_tid{0};
     std::jthread thread;

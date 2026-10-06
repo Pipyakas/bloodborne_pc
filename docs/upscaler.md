@@ -35,6 +35,29 @@ model in one gameplay process, including output captures and camera movement.
 `out/taa-launcher-validation.log` checks actual GTK controls and saved settings.
 TAA has not yet been tested on the tester's GTX 1060.
 
+## Live scaling closer to the startup patch (2026-10-06, Windows, RTX 3070 Laptop)
+
+Live scaling cost 15% against the startup patch at 1440p DLSS Performance (54 vs 63 FPS, GPU
+18.4 vs 15.3 ms/frame). Per frame the difference was GPU transfers, not rendering:
+
+- Four guest memcpys of render targets (compute `3d5ebf4e`: depth into an R32F texture, a
+  G-buffer target and two others) went through guest memory: tile the image into the buffer
+  arena, copy, detile the destination again; with live scaling also a proxy resolve first.
+  `IsComputeImageCopy` now takes them as image copies when the source buffer extends past the
+  image (depth plus stencil/HTILE planes: the tail is a buffer copy) and when no destination
+  image exists yet (one is created like the source). With live scaling the copy goes proxy to
+  proxy (`SceneTargets::CopyProxy`; depth to R32F needs VK_KHR_maintenance8).
+- Six guest compute clears of G-buffer targets (`8b355b5a`, already turned into image clears)
+  resolved each proxy before clearing the native image and filled it again afterwards.
+  `SceneTargets::ClearProxy` clears the proxy instead.
+
+Result in one run (toggle 1 << 58 restores the old paths): live 58.6 -> 65.9 FPS (GPU 17.1 ->
+15.15 ms/frame), startup patch 68.3 -> 69.5 FPS; screenshots differ no more than two taken in
+the same mode. Remaining live overhead (~0.8 ms): the 960x540 bloom chain (a guest-written
+upload, per-level fills and resolves for a multi-level read) and a few 1080p resolves.
+Tools: `BB_SCENE_DEBUG` frames now list dispatches and transfers in order; `BB_CS_LOG=<hash>`
+prints a compute shader's buffers and images (`BB_MEMCPY_LOG=1`).
+
 ## Startup patch is the default again for outputs other than 1080p (2026-10-02)
 
 The live path below made the Steam Deck and a GTX 1060 + 4-core Haswell drop to 7–8 FPS

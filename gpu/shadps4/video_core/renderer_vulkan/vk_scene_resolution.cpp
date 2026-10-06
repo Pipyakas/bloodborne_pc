@@ -384,13 +384,13 @@ vk::Pipeline SceneTargets::ResamplePipeline(vk::Format format, bool stencil) {
     resample_pipelines.emplace_back(key, std::move(pipeline));
     return result;
 }
-SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
+SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level, bool fill) {
     auto& original = *lookup(id, 0);
     const u64 key = Key(original.image_uid, level);
     // A draw has up to six targets, mostly the same as the previous draw's.
     for (const auto& [recent_key, recent_entry] : recent) {
         if (recent_entry && recent_key == key) {
-            if (!recent_entry->state.valid) Copy(*recent_entry, original, false);
+            if (fill && !recent_entry->state.valid) Copy(*recent_entry, original, false);
             return *recent_entry;
         }
     }
@@ -411,8 +411,80 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
         tracked.insert(original.image_uid);
     }
     recent[recent_next++ % recent.size()] = {key, entry.get()};
-    if (!entry->state.valid) Copy(*entry, original, false);
+    if (fill && !entry->state.valid) Copy(*entry, original, false);
     return *entry;
+}
+bool SceneTargets::ClearProxy(VideoCore::ImageId id, const vk::ClearColorValue& value) {
+    if (!Reduced() || copying) {
+        return false;
+    }
+    auto& image = *lookup(id, 0);
+    if (image.info.resources.levels != 1 || image.info.resources.layers != 1 ||
+        image.info.props.is_depth || !Eligible(image)) {
+        return false;
+    }
+    auto& e = Get(id, 0, false);
+    Transition(e, image.aspect_mask, vk::ImageLayout::eTransferDstOptimal,
+               vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite);
+    const vk::Image proxy = e.image;
+    scheduler.Record([proxy, value](vk::CommandBuffer cmd) {
+        const vk::ImageSubresourceRange range{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+        cmd.clearColorImage(proxy, vk::ImageLayout::eTransferDstOptimal, value, range);
+    });
+    e.state.ProxyWrite();
+    image.flags |= VideoCore::ImageFlagBits::GpuModified;
+    image.flags &= ~VideoCore::ImageFlagBits::Dirty;
+    return true;
+}
+bool SceneTargets::CopyProxy(VideoCore::ImageId src_id, VideoCore::ImageId dst_id) {
+    if (!Reduced() || copying) {
+        return false;
+    }
+    auto& src = *lookup(src_id, 0);
+    auto& dst = *lookup(dst_id, 0);
+    if (src.info.resources.levels != 1 || dst.info.resources.levels != 1 ||
+        src.info.size != dst.info.size || src.info.num_bits != dst.info.num_bits) {
+        return false;
+    }
+    const auto it = entries.find(Key(src.image_uid, 0));
+    // The proxy is newer than the native image: drawn to and not resolved since.
+    if (it == entries.end() || !it->second->state.valid || !it->second->state.dirty) {
+        return false;
+    }
+    const bool depth_to_color = src.info.props.is_depth != dst.info.props.is_depth;
+    if (!Eligible(dst) || ProxySize(src) != ProxySize(dst) || dst.info.props.is_depth ||
+        (depth_to_color && !instance.IsMaintenance8Supported())) {
+        return false;
+    }
+    auto& s = *it->second;
+    auto& d = Get(dst_id, 0, false);
+    const auto src_aspect = src.info.props.is_depth ? vk::ImageAspectFlagBits::eDepth
+                                                    : vk::ImageAspectFlagBits::eColor;
+    Transition(s, src.aspect_mask, vk::ImageLayout::eTransferSrcOptimal,
+               vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+    Transition(d, dst.aspect_mask, vk::ImageLayout::eTransferDstOptimal,
+               vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite);
+    const auto& extent = d.image.image_ci.extent;
+    const vk::ImageCopy region{
+        .srcSubresource = {src_aspect, 0, 0, 1},
+        .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .extent = {extent.width, extent.height, 1},
+    };
+    const vk::Image src_image = s.image, dst_image = d.image;
+    scheduler.Record([src_image, dst_image, region](vk::CommandBuffer cmd) {
+        cmd.copyImage(src_image, vk::ImageLayout::eTransferSrcOptimal, dst_image,
+                      vk::ImageLayout::eTransferDstOptimal, region);
+    });
+    if (debug) {
+        std::printf("Scene proxy copy: %s -> %s %ux%u\n",
+                    vk::to_string(src.info.pixel_format).c_str(),
+                    vk::to_string(dst.info.pixel_format).c_str(), extent.width, extent.height);
+    }
+    // The proxy is current and the native image stale: native access resolves it first.
+    d.state.ProxyWrite();
+    dst.flags |= VideoCore::ImageFlagBits::GpuModified;
+    dst.flags &= ~VideoCore::ImageFlagBits::Dirty;
+    return true;
 }
 vk::ImageView SceneTargets::View(Entry& e, const VideoCore::Image& original,
                                  const VideoCore::ImageViewInfo& info) {

@@ -232,6 +232,7 @@ private:
                   const IndirectDraw* indirect = nullptr);
     /// Everything of a direct dispatch after the pipeline selection (GPU thread or stage B).
     void DispatchRecord(const ComputePipeline* pipeline);
+    void LogRenderTargetMemcpy(const Shader::Info& cs, const AmdGpu::ComputeProgram& program);
     /// The compute registers of the dispatch being recorded.
     const AmdGpu::ComputeProgram& CsRegs() const;
     static void RunDrawPacket(void* rasterizer, const u8* packet, u32 size);

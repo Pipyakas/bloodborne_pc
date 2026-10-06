@@ -1288,6 +1288,46 @@ void Rasterizer::DispatchDirect() {
     DispatchRecord(pipeline);
 }
 
+/// bbport: BB_MEMCPY_LOG=1: the guest's dword memcpy (cs 3d5ebf4e) that copies render target
+/// memory: its buffers and the images at their addresses (first 60 dispatches).
+void Rasterizer::LogRenderTargetMemcpy(const Shader::Info& cs,
+                                       const AmdGpu::ComputeProgram& program) {
+    static const bool enabled = std::getenv("BB_MEMCPY_LOG") != nullptr;
+    static int logged = 0;
+    if (!enabled || logged >= 60) {
+        return;
+    }
+    ++logged;
+    std::printf("Memcpy cs: %ux%ux%u groups, %zu buffers, %zu images, threads %ux%ux%u\n",
+                program.dim_x, program.dim_y, program.dim_z, cs.buffers.size(), cs.images.size(),
+                program.num_thread_x.full, program.num_thread_y.full, program.num_thread_z.full);
+    for (const auto& desc : cs.images) {
+        const auto tsharp = desc.GetSharp(cs);
+        std::printf("  image binding %#llx %ux%u %s\n", (unsigned long long)tsharp.Address(),
+                    tsharp.width + 1, tsharp.height + 1, desc.is_written ? "written" : "read");
+    }
+    for (const auto& desc : cs.buffers) {
+        const auto sharp = desc.GetSharp(cs);
+        std::printf("  buffer %#llx size %#llx stride %u %s\n",
+                    (unsigned long long)sharp.base_address, (unsigned long long)sharp.GetSize(),
+                    sharp.GetStride(), desc.is_written ? "written" : "read");
+        if (!sharp.base_address) {
+            continue;
+        }
+        texture_cache.ForEachImageInRegion(sharp.base_address, sharp.GetSize(),
+                                           [&](VideoCore::ImageId, VideoCore::Image& image) {
+            const auto& i = image.info;
+            std::printf("    image %#llx size %#x: %s %ux%u pitch %u bits %u tile %u %s%s\n",
+                        (unsigned long long)i.guest_address, i.guest_size,
+                        vk::to_string(i.pixel_format).c_str(), i.size.width, i.size.height,
+                        i.pitch, i.num_bits, u32(i.tile_mode),
+                        True(image.flags & VideoCore::ImageFlagBits::GpuModified) ? "gpu-modified"
+                                                                                  : "",
+                        i.props.is_depth ? " depth" : "");
+        });
+    }
+}
+
 void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     FrameCapture::Poll();
     gbuffer_draw = false;
@@ -1308,6 +1348,17 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     };
     if (upscaler->Enabled()) {
         upscaler->OnDispatch(cs.pgm_hash);
+    }
+    static const u64 cs_log = [] {
+        const char* env = std::getenv("BB_CS_LOG");
+        return env ? std::strtoull(env, nullptr, 16) : 0x3d5ebf4eull;
+    }();
+    if (cs.pgm_hash == cs_log) {
+        LogRenderTargetMemcpy(cs, cs_program);
+    }
+    if (scene_debug_frame) {
+        std::printf("Scene dispatch: cs %08llx %ux%ux%u\n", (unsigned long long)cs.pgm_hash,
+                    cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
     }
     if (ExecuteShaderHLE(cs, Regs(), cs_program, *this)) {
         return;
@@ -1946,27 +1997,67 @@ bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline) {
 
     // Find images the buffer alias
     const auto image0_id = texture_cache.FindImageFromRange(buf0.base_address, buf0.GetSize());
-    if (!image0_id) {
+    auto image1_id = texture_cache.FindImageFromRange(buf1.base_address, buf1.GetSize(), false);
+    // bbport: Bloodborne copies render targets this way four times a frame: depth into an R32F
+    // texture (the buffer also covers the stencil and HTILE planes after the depth image), a
+    // G-buffer target and two others into memory no image covers yet. The general path tiles
+    // each image into guest memory, copies it, then detiles the destination again (~1 ms per
+    // frame at 720p, ~2.3 ms with live scaling). An image copy does the same work once.
+    const bool extended = !BbToggle::Disabled(BbToggle::RenderTargetMemcpy);
+    const AmdGpu::Buffer src_buf = desc0.is_written ? buf1 : buf0;
+    const AmdGpu::Buffer dst_buf = desc0.is_written ? buf0 : buf1;
+    const auto src_id = desc0.is_written ? image1_id : image0_id;
+    auto dst_id = desc0.is_written ? image0_id : image1_id;
+    if (!src_id) {
         return false;
     }
-    const auto image1_id =
-        texture_cache.FindImageFromRange(buf1.base_address, buf1.GetSize(), false);
-    if (!image1_id) {
-        return false;
+    VideoCore::Image& src_probe = texture_cache.GetImage(src_id);
+    if (!dst_id) {
+        // No image at the destination yet: create one like the source, so the copy lands in
+        // an image the next pass samples instead of in guest memory.
+        if (!extended || src_probe.info.guest_size > src_buf.GetSize() ||
+            src_probe.info.resources.levels != 1 || src_probe.info.props.is_depth ||
+            !src_probe.SafeToDownload()) {
+            return false;
+        }
+        VideoCore::TextureCache::ImageDesc desc{};
+        desc.info = src_probe.info;
+        desc.info.guest_address = dst_buf.base_address;
+        desc.type = VideoCore::TextureCache::BindingType::Texture;
+        dst_id = texture_cache.FindImage(desc);
+        if (!dst_id) {
+            return false;
+        }
     }
 
     // Image copy must be valid
-    VideoCore::Image& image0 = texture_cache.GetImage(image0_id);
-    VideoCore::Image& image1 = texture_cache.GetImage(image1_id);
-    if (image0.info.guest_size != image1.info.guest_size ||
-        image0.info.pitch != image1.info.pitch || image0.info.guest_size != buf0.GetSize() ||
-        image0.info.num_bits != image1.info.num_bits) {
+    VideoCore::Image& src_image = texture_cache.GetImage(src_id);
+    VideoCore::Image& dst_image = texture_cache.GetImage(dst_id);
+    const u64 size = src_buf.GetSize();
+    if (src_image.info.guest_size != dst_image.info.guest_size ||
+        src_image.info.pitch != dst_image.info.pitch ||
+        src_image.info.num_bits != dst_image.info.num_bits) {
         return false;
     }
+    if (src_image.info.guest_size != size) {
+        if (!extended || src_image.info.guest_size > size || !src_image.SafeToDownload()) {
+            return false;
+        }
+        // The bytes after the image (other planes, not GPU-written images) as a buffer copy.
+        const u64 head = src_image.info.guest_size, tail = size - head;
+        const auto [tail_src, tail_src_offset] =
+            buffer_cache.ObtainBuffer(src_buf.base_address + head, tail, false);
+        const auto [tail_dst, tail_dst_offset] =
+            buffer_cache.ObtainBuffer(dst_buf.base_address + head, tail, true);
+        const vk::BufferCopy copy{tail_src_offset, tail_dst_offset, tail};
+        runtime.CopyBuffer(tail_src, tail_dst, std::span{&copy, 1});
+        texture_cache.InvalidateMemoryFromGPU(dst_buf.base_address + head, tail);
+    }
 
-    // Perform image copy
-    VideoCore::Image& src_image = desc0.is_written ? image1 : image0;
-    VideoCore::Image& dst_image = desc0.is_written ? image0 : image1;
+    // Perform image copy: proxy to proxy while the scene is reduced (live scaling).
+    if (extended && scene_targets->CopyProxy(src_id, dst_id)) {
+        return true;
+    }
     runtime.CopyColorAndDepth(&src_image, &dst_image);
     return true;
 }
@@ -2017,6 +2108,11 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     const vk::ClearValue clear = {
         .color = {.float32 = std::array<float, 4>{values[0], values[1], values[2], values[3]}},
     };
+    // bbport: with live scaling, clear the reduced proxy the scene passes draw into.
+    if (!BbToggle::Disabled(BbToggle::RenderTargetMemcpy) &&
+        scene_targets->ClearProxy(image1_id, clear.color)) {
+        return true;
+    }
     const VideoCore::SubresourceRange range = {
         .base =
             {

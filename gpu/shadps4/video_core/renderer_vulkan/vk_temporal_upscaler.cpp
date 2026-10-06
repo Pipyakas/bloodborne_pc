@@ -25,6 +25,7 @@
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
+#include "video_core/renderer_vulkan/vk_frame_gen.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -1158,6 +1159,9 @@ void TemporalUpscaler::Run() {
         }
     }
     if (dispatched) {
+        // 1080p: upscaled before the game's post-processing, so there is no hud-less image
+        // in the display's colors; frame generation gets depth and motion only.
+        RecordFrameGen(cmdbuf, input_depth, depth_format, w, h, ow, oh, reset, false);
         reset = false;
         dispatched_last_frame = true;
         if (BbSettings::Get().upscaler != BbSettings::UpscalerTaa) {
@@ -1520,8 +1524,10 @@ void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId
 
 void TemporalUpscaler::RunScaled() {
     if (auto* profiler = GpuProfiler::Get()) {
-        const char* label = BbSettings::Get().upscaler == BbSettings::UpscalerTaa
-            ? "upscaler RunScaled (TAA)" : "upscaler RunScaled (FSR)";
+        const int upscaler = BbSettings::Get().upscaler;
+        const char* label = upscaler == BbSettings::UpscalerTaa ? "upscaler RunScaled (TAA)"
+            : upscaler == BbSettings::UpscalerDlss ? "upscaler RunScaled (DLSS)"
+                                                   : "upscaler RunScaled (FSR)";
         profiler->Mark(0xF5A0'0000ull ^ std::hash<std::string_view>{}(label),
                        [label] { return std::string{label}; });
     }
@@ -1607,6 +1613,7 @@ void TemporalUpscaler::RunScaled() {
     }
     last_frame = now;
 
+    const bool was_reset = reset;
     // bbport: FSR 4 writes its HDR-format output, copied into the output-size UI image.
     if (UseFsr4() || BbSettings::Get().upscaler == BbSettings::UpscalerTaa) {
         barrier(vk::Image(output_image), vk::ImageAspectFlagBits::eColor,
@@ -1647,6 +1654,7 @@ void TemporalUpscaler::RunScaled() {
                     vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eBlit,
                     vk::AccessFlagBits2::eTransferWrite, vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits2::eColorAttachmentOutput, color_access);
+            RecordFrameGen(cmdbuf, depth_image, depth_format, w, h, ow, oh, was_reset, true);
             reset = false;
             dispatched_last_frame = true;
             if (const int dump = DumpFrame(); dump >= 0) {
@@ -1741,6 +1749,7 @@ void TemporalUpscaler::RunScaled() {
         reset = false;
         dispatched_last_frame = true;
         ExtraSharpen(cmdbuf, vk::Image(ui_image), true, ow, oh);
+        RecordFrameGen(cmdbuf, depth_image, depth_format, w, h, ow, oh, was_reset, true);
     }
     barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral, all,
             rw, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -1921,6 +1930,32 @@ bool TemporalUpscaler::UseFsr4() const {
                                ? instance.IsFsr411Supported()
                                : instance.IsFsr4Int8Supported();
     return BbSettings::IsFsr4(selected) && supported && !fsr4_failed;
+}
+
+void TemporalUpscaler::RecordFrameGen(vk::CommandBuffer cmdbuf, vk::Image depth,
+                                      vk::Format depth_format, u32 w, u32 h, u32 ow, u32 oh,
+                                      bool was_reset, bool hudless) {
+    if (!FrameGen::Active() || (depth_format != vk::Format::eD32Sfloat &&
+                                depth_format != vk::Format::eD32SfloatS8Uint)) {
+        return;
+    }
+    const auto cameras = camera_motion.GetCameras();
+    if (!cameras.valid) {
+        return;
+    }
+    FrameGen::RecordInputs(cmdbuf, {
+        .depth = depth,
+        .motion = vk::Image(motion_image),
+        .hudless = hudless ? vk::Image(ui_image) : vk::Image{},
+        .render_width = w,
+        .render_height = h,
+        .out_width = ow,
+        .out_height = oh,
+        .jitter = jitter,
+        .camera = {cameras.view, cameras.inv_view, cameras.prev_view, cameras.prev_inv_view,
+                   cameras.proj, cameras.prev_proj},
+        .reset = was_reset,
+    });
 }
 
 bool TemporalUpscaler::RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image color,
