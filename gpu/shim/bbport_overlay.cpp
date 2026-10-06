@@ -348,9 +348,10 @@ void Menu() {
         ImGui::EndCombo();
     }
     if (s.frame_gen_ready) {
-        ImGui::Text("%s", s.frame_gen_active ? "Generating frames"
-                          : s.frame_gen == BbSettings::FrameGenOff ? "Off (presenting through DXGI)"
-                                                                   : "Waiting for a scene");
+        const char* status = s.frame_gen_active ? "Generating frames"
+            : s.frame_gen == BbSettings::FrameGenOff ? "Off (presenting through DXGI)"
+            : s.frame_gen_problem.load() ? "No generated frames" : "Waiting for a scene";
+        ImGui::Text("%s", status);
     } else if ((s.frame_gen != BbSettings::FrameGenOff) != (s.startup_frame_gen != BbSettings::FrameGenOff)) {
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Applies after restarting the game");
     }
@@ -361,7 +362,8 @@ void Menu() {
     }
     Hint("NVIDIA DLSS Frame Generation through Streamline: the game renders one frame and DLSS-G "
          "adds 1-3 generated ones (Dynamic picks the count to reach the display refresh rate). "
-         "Rendered frames are capped at refresh / multiplier. Generation pauses while the window "
+         "The render cap is divided only when generated frames are actually presented. "
+         "Generation pauses while the window "
          "is not focused (DLSS-G's own rule). Needs an upscaler (DLSS, FSR or TAA); outputs other "
          "than 1080p also give it the scene without the HUD (cleaner UI). Files: out/streamline "
          "(tools/fetch_streamline.sh) and on RTX 20/30 the dlssg_sm86 mod in out/dlssg_sm86. "

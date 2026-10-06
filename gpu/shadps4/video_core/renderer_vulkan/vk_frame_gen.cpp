@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "video_core/renderer_vulkan/vk_frame_gen.h"
+#include "video_core/renderer_vulkan/frame_gen_pacing.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 #ifndef _WIN32
@@ -52,6 +53,7 @@ void DropInputs(int) {}
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <windows.h>
@@ -439,13 +441,15 @@ u32 GeneratedFrames(int mode) {
     }
 }
 
-/// Reflex caps the rendered frame rate at the display rate divided by the multiplier, so the
-/// output stays within the refresh rate; dynamic mode picks its multiplier itself.
+/// Divide the selected frame limit only by frames confirmed presented by DLSS-G. Selecting
+/// 4x is not proof of generation: otherwise a failed/inactive plugin locks a 120 Hz game to 30.
 void ApplyReflex(int mode) {
-    const u32 hz = BbDisplayRefreshHz();
-    const u32 limit_us = mode == BbSettings::FrameGenDynamic || mode == BbSettings::FrameGenOff
-                             ? 0
-                             : u32(1e6 * (GeneratedFrames(mode) + 1) / double(hz));
+    const auto& settings = BbSettings::Get();
+    const u32 limit_us = RenderedLimitUs(EmulatorSettings.GetFrameLimit(), GeneratedFrames(mode) + 1,
+                                       std::max(1, settings.frame_gen_presented.load()),
+                                       settings.frame_gen_active &&
+                                           mode != BbSettings::FrameGenDynamic &&
+                                           mode != BbSettings::FrameGenOff);
     if (limit_us == g->reflex_limit_us || !g->slReflexSetOptions) {
         return;
     }
@@ -813,11 +817,16 @@ void ReportStatus(const sl::DLSSGOptions& options) {
     }
     g->last_status = now;
     sl::DLSSGState state{};
+    auto& settings = BbSettings::Get();
     if (g->slDLSSGGetState(sl::ViewportHandle{0}, state, &options) != sl::Result::eOk) {
+        settings.frame_gen_active = false;
+        settings.frame_gen_presented = 1;
+        SetProblem("DLSS-G status unavailable; rendered-frame cap released");
         return;
     }
-    auto& settings = BbSettings::Get();
-    const bool on = options.mode != sl::DLSSGMode::eOff && state.status == sl::DLSSGStatus::eOk;
+    const bool requested = options.mode != sl::DLSSGMode::eOff;
+    const bool on = requested && state.status == sl::DLSSGStatus::eOk &&
+                    state.numFramesActuallyPresented > 1;
     settings.frame_gen_active = on;
     settings.frame_gen_presented = on ? std::max<int>(1, state.numFramesActuallyPresented) : 1;
     static std::string text;
@@ -829,7 +838,14 @@ void ReportStatus(const sl::DLSSGOptions& options) {
              : (s & sl::DLSSGStatus::eFailCommonConstantsInvalid) ? "invalid camera constants"
                                                                   : "DLSS-G status error";
         SetProblem(text);
-    } else if (options.mode != sl::DLSSGMode::eOff) {
+    } else if (requested && !on) {
+        constexpr const char* inactive =
+            "DLSS-G is not presenting generated frames; rendered-frame cap released";
+        const char* problem = settings.frame_gen_problem.load();
+        if (!problem || std::string_view(problem) != inactive) {
+            SetProblem(inactive);
+        }
+    } else {
         settings.frame_gen_problem = nullptr;
     }
     if (std::getenv("BB_FRAME_STATS")) {
@@ -846,6 +862,8 @@ void ReportStatus(const sl::DLSSGOptions& options) {
 bool Init(const Instance& instance, void* hwnd) {
     auto& settings = BbSettings::Get();
     settings.frame_gen_ready = false;
+    settings.frame_gen_active = false;
+    settings.frame_gen_presented = 1;
     if (settings.startup_frame_gen == BbSettings::FrameGenOff) {
         return false;
     }
@@ -887,6 +905,8 @@ void Resize(u32 width, u32 height) {
         std::printf("Frame generation: present images %ux%u failed\n", width, height);
     }
     g->options_set = false; // the output size is part of the options
+    BbSettings::Get().frame_gen_active = false;
+    BbSettings::Get().frame_gen_presented = 1;
 }
 
 u32 ImageCount() {
@@ -949,6 +969,10 @@ bool Present(u32 index, int inputs) {
     // Menus and loading screens have no scene: generation pauses (its resources are kept).
     const bool generate = mode != BbSettings::FrameGenOff && g->presents_without_inputs < 2;
     const bool tag = have_inputs && inputs >= 0;
+    if (!generate) {
+        settings.frame_gen_active = false;
+        settings.frame_gen_presented = 1;
+    }
 
     sl::FrameToken* token = nullptr;
     const uint32_t frame_index = frame;
@@ -983,23 +1007,29 @@ bool Present(u32 index, int inputs) {
         options.mvecDepthHeight = g->applied.mvecDepthHeight;
     }
     const auto& a0 = g->applied;
+    bool options_ok = true;
     if (!g->options_set || a0.mode != options.mode ||
         a0.numFramesToGenerate != options.numFramesToGenerate ||
         a0.colorWidth != options.colorWidth || a0.colorHeight != options.colorHeight ||
         a0.mvecDepthWidth != options.mvecDepthWidth ||
         a0.mvecDepthHeight != options.mvecDepthHeight) {
         const sl::Result r = g->slDLSSGSetOptions(viewport, options);
+        settings.frame_gen_active = false;
+        settings.frame_gen_presented = 1;
         if (r != sl::Result::eOk) {
             SetProblem(std::string("DLSS-G options rejected: ") + SlResult(r));
+            options_ok = false;
+            g->options_set = false;
         } else if (!g->options_set || a0.mode != options.mode ||
                    a0.numFramesToGenerate != options.numFramesToGenerate) {
             std::printf("Frame generation: %s\n",
                         options.mode == sl::DLSSGMode::eOff ? "paused (no scene)"
                                                             : BbSettings::FrameGenLabel(mode));
         }
-        g->applied = options;
-        g->options_set = true;
-        ApplyReflex(generate ? mode : BbSettings::FrameGenOff);
+        if (options_ok) {
+            g->applied = options;
+            g->options_set = true;
+        }
     }
 
     if (token && tag) {
@@ -1049,7 +1079,13 @@ bool Present(u32 index, int inputs) {
             std::printf("Frame generation: Present failed (0x%08lx)\n", hr);
         }
     }
-    ReportStatus(options);
+    if (options_ok && SUCCEEDED(hr)) {
+        ReportStatus(options);
+    } else {
+        settings.frame_gen_active = false;
+        settings.frame_gen_presented = 1;
+    }
+    ApplyReflex(generate ? mode : BbSettings::FrameGenOff);
     return SUCCEEDED(hr);
 }
 
