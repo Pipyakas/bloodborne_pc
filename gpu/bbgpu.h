@@ -41,6 +41,8 @@ int bbgpu_text_input_active(void);
 int bbgpu_first_run(const char *result_path);
 /* Frames presented since start. */
 uint64_t bbgpu_present_count(void);
+/* Applies one bbport.ini setting while the game runs (not saved). */
+void bbgpu_set_setting(const char *key, const char *value);
 /* Writes the next presented frame (the game's picture with its HUD, without the settings menu)
  * to a PNG, scaled down to at most max_width pixels wide (0: full size). 0 on success, -1 when
  * no frame was presented within timeout_ms or the display format is not supported. */
