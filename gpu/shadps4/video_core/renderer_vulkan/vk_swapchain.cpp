@@ -65,6 +65,12 @@ void Swapchain::Create(u32 width_, u32 height_) {
 
     SetSurfaceProperties();
 
+    // Minimized Win32 surfaces can have a zero extent. Never create a zero-sized
+    // swapchain (some drivers crash); the presenter still renders/captures offscreen.
+    if (window.IsMinimized() || !extent.width || !extent.height) {
+        return;
+    }
+
     const std::array queue_family_indices = {
         instance.GetGraphicsQueueFamilyIndex(),
         instance.GetPresentQueueFamilyIndex(),
@@ -114,6 +120,8 @@ void Swapchain::SetHDR(bool hdr) {
         return;
     }
 
+    // bbport: vkDeviceWaitIdle needs every queue externally synchronised (see Present).
+    std::scoped_lock submit_lock{Scheduler::submit_mutex};
     auto result = instance.GetDevice().waitIdle();
     if (result != vk::Result::eSuccess) {
         LOG_WARNING(ImGui, "Failed to wait for Vulkan device idle on mode change: {}",
@@ -134,6 +142,9 @@ bool Swapchain::AcquireNextImage() {
         image_index = FrameGen::Acquire();
         return true;
     }
+    if (!swapchain) {
+        return false;
+    }
     vk::Device device = instance.GetDevice();
     vk::Result result =
         device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
@@ -143,6 +154,11 @@ bool Swapchain::AcquireNextImage() {
     case vk::Result::eSuccess:
         break;
     case vk::Result::eSuboptimalKHR:
+        // bbport: the image was acquired and its semaphore will be signalled, so it must be
+        // presented: destroying the swapchain now would destroy a semaphore with a pending
+        // signal. Present it, and recreate after the present (which reports the same state).
+        needs_recreation = true;
+        return true;
     case vk::Result::eErrorSurfaceLostKHR:
     case vk::Result::eErrorOutOfDateKHR:
     case vk::Result::eErrorUnknown:
@@ -330,7 +346,10 @@ void Swapchain::Destroy() {
 
     if (swapchain) {
         device.destroySwapchainKHR(swapchain);
+        swapchain = nullptr;
     }
+    images.clear();
+    frame_index = image_index = 0;
 
     for (const auto& sem : image_acquired) {
         device.destroySemaphore(sem);

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 """MCP server (stdio, standard library only) that lets agents start and play the port without
-touching the desktop: the game runs with BB_HIDDEN=1 (no window, the host keyboard and gamepads
-ignored), BB_AUDIO=none and no console, and is driven through its control channel (BB_CONTROL,
+touching the desktop: the game defaults to BB_MINIMIZED=1 (minimized taskbar window without
+focus), or explicitly BB_HIDDEN=1 (hidden window), with host keyboard and gamepads ignored, BB_AUDIO=none
+and no console, and is driven through its control channel (BB_CONTROL,
 src/runtime_control.c). Screenshots come from the presenter, not from the screen.
 
 Registered in the repository's .mcp.json; by hand: python tools/mcp/bbport_mcp.py
@@ -12,6 +13,7 @@ Command line (sessions without the MCP server, scripts): one tool per call, the 
 running in between (out/mcp/session.json), arguments as key=value (values in JSON when they
 parse) or one JSON object:
     python tools/mcp/bbport_mcp.py launch
+    python tools/mcp/bbport_mcp.py launch minimized=true
     python tools/mcp/bbport_mcp.py press tokens=cross repeat=2 screenshot=true
     python tools/mcp/bbport_mcp.py screenshot          (prints the PNG's path)
     python tools/mcp/bbport_mcp.py stop
@@ -69,15 +71,16 @@ class Game:
             self.pid = None
             SESSION.unlink(missing_ok=True)
 
-    def launch(self, hidden=True, audio=False, build=False, fps_limit=60, game_dir=None, env=None, args=(),
-               timeout=300):
+    def launch(self, hidden=False, audio=False, build=False, fps_limit=60, game_dir=None, env=None, args=(),
+               timeout=300, minimized=True):
         if self.running():
             raise Failure('the game is already running (game_stop first)')
         OUT.mkdir(parents=True, exist_ok=True)
         environment = dict(os.environ)
         environment.update(BB_CONTROL='0', BB_FRAME_STATS='1')
-        if hidden:
-            environment['BB_HIDDEN'] = '1'
+        # Explicitly clear inherited launch modes. Hidden opts out of default minimized mode.
+        environment['BB_HIDDEN'] = '1' if hidden else '0'
+        environment['BB_MINIMIZED'] = '1' if minimized and not hidden else '0'
         # Silent by default, visible window or not (the user works next to these runs).
         environment['BB_AUDIO'] = 'sdl' if audio else 'none'
         if not build:
@@ -304,10 +307,14 @@ def capture(max_width):
             {'type': 'text', 'text': f'{width}x{height}, saved to {path}'}]
 
 
-@tool('game_launch', 'Start the game in the background (hidden window, no audio, host input '
+@tool('game_launch', 'Start the game in the background (minimized taskbar window without focus, no audio, host input '
       'ignored) and wait until it reads the pad, i.e. the title screen is loading. Takes 20-90 s; '
       'with build=true the port is rebuilt first (minutes, added to the timeout). Returns the end of the log.',
-      {'hidden': {'type': 'boolean', 'default': True, 'description': 'false shows the window (and takes focus)'},
+       {'hidden': {'type': 'boolean', 'default': False, 'description': 'hide the window completely; overrides minimized'},
+        'minimized': {'type': 'boolean', 'default': True,
+                      'description': 'create a minimized taskbar window without taking focus; false with hidden=false '
+                                     'shows the window and takes focus; '
+                                     'host input remains ignored, even after restoring the window'},
        'audio': {'type': 'boolean', 'default': False,
                  'description': 'play sound; leave off unless the user asked for it'},
        'build': {'type': 'boolean', 'default': False, 'description': 'rebuild through build.sh first'},
@@ -319,12 +326,12 @@ def capture(max_width):
        'args': {'type': 'array', 'items': {'type': 'string'},
                 'description': 'bb-probe options, e.g. ["--launch", "continue"]'},
        'timeout_s': {'type': 'number', 'default': 300}})
-def game_launch(hidden=True, audio=False, build=False, fps_limit=60, game_dir=None, env=None, args=(),
-                timeout_s=300):
+def game_launch(hidden=False, audio=False, build=False, fps_limit=60, game_dir=None, env=None, args=(),
+                timeout_s=300, minimized=True):
     timeout_s = float(timeout_s) + (1800 if build else 0)  # the build's link-time optimization
     deadline = time.monotonic() + timeout_s
     try:
-        GAME.launch(hidden, audio, build, fps_limit, game_dir, env, args, timeout_s)
+        GAME.launch(hidden, audio, build, fps_limit, game_dir, env, args, timeout_s, minimized=minimized)
     except Failure:
         if GAME.process:
             GAME.stop()

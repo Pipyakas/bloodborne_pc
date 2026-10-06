@@ -37,6 +37,7 @@ void RecordInputs(vk::CommandBuffer, const Inputs&) {}
 int TakeInputs() {
     return -1;
 }
+void DropInputs(int) {}
 } // namespace Vulkan::FrameGen
 
 #else
@@ -1178,6 +1179,13 @@ int TakeInputs() {
         g->sets[inputs].consumed = kTaken;
     }
     return inputs;
+}
+
+void DropInputs(int inputs) {
+    // Never read by D3D12: nothing to wait for (RecordInputs otherwise waits 100 ms for it).
+    if (g && inputs >= 0 && inputs < int(kInputSets) && g->sets[inputs].consumed == kTaken) {
+        g->sets[inputs].consumed = 0;
+    }
 }
 
 } // namespace Vulkan::FrameGen

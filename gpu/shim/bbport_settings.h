@@ -49,6 +49,10 @@ int DlssAutoPreset(int preset);
 /// "CNN (DLSS 3)", "Transformer (DLSS 4)" or "Transformer 2 (DLSS 4.5)" for an NGX preset.
 const char* DlssGeneration(int ngx_preset);
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
+/// Launch shortcut (runtime_menu.c): where the game goes at start, as if the title screen's
+/// rows were selected. Applied once per start; without a save Continue stops at the menu.
+enum Launch : int { LaunchTitle = 0, LaunchOffline, LaunchContinue, LaunchLoad, LaunchNewGame,
+                    LaunchSystem, LaunchCount };
 
 /// Game effects switched by the community patches at start (patches.py EFFECTS): ini key,
 /// menu label, default (the game's own behaviour).
@@ -75,6 +79,10 @@ inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840};
 inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160};
 inline constexpr int OutputCount = 4;
 inline constexpr int OutputDefault = 2; ///< 2560x1440 (index 1, 1920x1080, is the game's own size)
+/// Frame rate limits (frame_limit, FPS; 0: the display refresh rate). The uncapped frame rate
+/// preset keeps the game's timing up to 120 FPS.
+inline constexpr int FrameLimits[] = {0, 30, 60, 90, 120};
+inline constexpr int FrameLimitCount = 5;
 
 struct Values {
     // Defaults: DLSS (FSR 3.1 where it is unavailable), Performance, CNN model, 4x generation.
@@ -108,6 +116,25 @@ struct Values {
     /// GPUs: presets switch without a restart, ~15% more GPU time), 0 off (startup patch,
     /// fastest; the Steam Deck and older GPUs), 1 on. On restart.
     std::atomic<int> live_resolution{-1};
+    /// Window and input (on start): a maximised window; gamepads read while unfocused.
+    std::atomic<bool> maximized{true};
+    std::atomic<int> frame_limit{0}; ///< FPS, 0: display refresh rate (at most 120)
+    std::atomic<bool> background_gamepad{true};
+    /// Mouse cursor hidden after 500 ms without motion, or at once on gamepad input.
+    std::atomic<bool> hide_cursor{true};
+    /// The keyboard plays the game (runtime_pad.c); off leaves the keys to other programs.
+    std::atomic<bool> keyboard_controls{true};
+    /// The settings menu opens docked over the whole window (drag its tab to undock).
+    std::atomic<bool> overlay_docked{true};
+    /// Audio: everything muted, or muted while the window is not focused.
+    std::atomic<bool> mute{false};
+    std::atomic<bool> mute_background{true};
+    /// Launch shortcut (BB_LAUNCH, --launch override it for one start). Read at start.
+    std::atomic<int> launch{LaunchContinue};
+    /// The file's choice, written back by Save (an override is not saved).
+    std::atomic<int> launch_saved{LaunchContinue};
+    /// Set by the window thread.
+    std::atomic<bool> window_focused{true};
     /// Why FSR 4 cannot run (assets, device features), or null. Set by the renderer.
     std::atomic<const char*> fsr4_problem{nullptr};
     std::atomic<bool> fsr4_supported{false}, fsr411_supported{false}, dlss_supported{false};
@@ -123,6 +150,8 @@ struct Values {
     int startup_upscaler = UpscalerDlss;
     bool startup_object_motion = true;
     bool startup_effects[EffectCount]{};
+    /// Effects runtime_effects.c switches while the game runs (startup_effects follows them).
+    std::atomic<bool> live_effects[EffectCount]{};
     int startup_model_lod = 0;
     int startup_output_res = OutputDefault;
     int startup_live_resolution = -1;
@@ -146,5 +175,9 @@ void Save();
 float PresetScale(int preset);
 const char* PresetName(int preset);
 const char* UpscalerName(int upscaler);
+/// bbport.ini / --launch names: title, offline, continue, load, new_game, system.
+const char* LaunchName(int launch);
+/// Menu label of a launch shortcut.
+const char* LaunchLabel(int launch);
 
 } // namespace BbSettings

@@ -5,6 +5,7 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "sdl_window.h"
+#include "bbport_native_settings.h"
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
 
@@ -12,6 +13,9 @@ namespace Frontend {
 
 WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}, height{height_} {
     // Gamepads are sampled by runtime_pad.c; their events are pumped here with the window's.
+    // SDL drops gamepad state while another window has focus unless asked not to.
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,
+                BbSettings::Get().background_gamepad ? "1" : "0");
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         UNREACHABLE_MSG("Failed to initialize SDL video: {}", SDL_GetError());
     }
@@ -26,17 +30,31 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     // BB_HIDDEN=1: the window is never shown (agents driving the game through BB_CONTROL while
     // the desktop is in use); the swapchain keeps the window's size.
     const char* hidden = std::getenv("BB_HIDDEN");
+    const char* minimized = std::getenv("BB_MINIMIZED");
     const char* fullscreen = std::getenv("BB_FULLSCREEN");
-    if (hidden && hidden[0] == '1') {
+    hidden_window = hidden && hidden[0] == '1';
+    if (hidden_window) {
+        // Background runs (BB_HIDDEN): never shown, maximised or made full screen.
         SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true);
+    } else if (minimized && minimized[0] == '1') {
+        // Create minimized, rather than showing then minimizing (which can steal focus or
+        // flash on the desktop). SDL's Win32 backend uses SW_SHOWMINNOACTIVE here.
+        // Ignore saved fullscreen settings; the user can restore this window from the taskbar.
+        SDL_SetHintWithPriority(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0", SDL_HINT_OVERRIDE);
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_MINIMIZED_BOOLEAN, true);
     } else {
-        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
-                               fullscreen ? fullscreen[0] == '1' : BbSettings::Get().fullscreen.load());
+        const bool full = fullscreen ? fullscreen[0] == '1' : BbSettings::Get().fullscreen.load();
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, full);
+        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_MAXIMIZED_BOOLEAN,
+                               BbSettings::Get().maximized.load());
+        BbSettings::Get().fullscreen = full; // BB_FULLSCREEN: this start's mode
     }
+    screen_mode = BbSettings::Get().fullscreen ? 2 : BbSettings::Get().maximized ? 1 : 0;
     base_title = title;
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     ASSERT_MSG(window, "Failed to create window: {}", SDL_GetError());
+    is_minimized = (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) != 0;
 
     const char* driver = SDL_GetCurrentVideoDriver();
     const SDL_PropertiesID wp = SDL_GetWindowProperties(window);
@@ -123,8 +141,15 @@ bool WindowSDL::PollEvents() {
     if (!text_active) {
         BbOverlay::UpdateTextInput(window);
     }
+    BbNative::Poll(); // the game's options screen edits the port's settings
+    ApplyScreenMode();
     SDL_Event event;
+    UpdateCursor(nullptr);
     while (SDL_PollEvent(&event)) {
+        UpdateCursor(&event);
+        if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED || event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+            BbSettings::Get().window_focused = event.type == SDL_EVENT_WINDOW_FOCUS_GAINED;
+        }
         if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
             std::scoped_lock lock{text_mutex};
             if (event.type == SDL_EVENT_TEXT_INPUT) {
@@ -145,6 +170,13 @@ bool WindowSDL::PollEvents() {
             continue;
         }
         switch (event.type) {
+        case SDL_EVENT_WINDOW_MINIMIZED:
+            is_minimized = true;
+            break;
+        case SDL_EVENT_WINDOW_RESTORED:
+        case SDL_EVENT_WINDOW_MAXIMIZED:
+            is_minimized = false;
+            break;
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
         case SDL_EVENT_WINDOW_RESIZED: {
             int w = 0, h = 0;
@@ -156,7 +188,9 @@ bool WindowSDL::PollEvents() {
         case SDL_EVENT_KEY_DOWN:
             // F11: borderless fullscreen at the desktop size, or back to the window.
             if (event.key.key == SDLK_F11 && !event.key.repeat) {
-                SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+                auto& s = BbSettings::Get();
+                s.fullscreen = !s.fullscreen;
+                BbSettings::Save();
             }
             break;
         case SDL_EVENT_QUIT:
@@ -168,6 +202,53 @@ bool WindowSDL::PollEvents() {
         }
     }
     return is_open;
+}
+
+void WindowSDL::UpdateCursor(const SDL_Event* event) {
+    constexpr u64 IdleMs = 500;
+    // Stick motion below this (of 32767) is drift, not input.
+    constexpr int AxisThreshold = 8000;
+    const u64 now = SDL_GetTicks();
+    bool show = false, hide = false;
+    if (!event) {
+        hide = now - last_mouse_motion_ms >= IdleMs;
+    } else if (event->type == SDL_EVENT_MOUSE_MOTION || event->type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+               event->type == SDL_EVENT_MOUSE_WHEEL) {
+        last_mouse_motion_ms = now;
+        show = true;
+    } else if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+               (event->type == SDL_EVENT_GAMEPAD_AXIS_MOTION &&
+                (event->gaxis.value > AxisThreshold || event->gaxis.value < -AxisThreshold))) {
+        hide = true;
+    }
+    if (!BbSettings::Get().hide_cursor) {
+        hide = false;
+        show = cursor_hidden;
+    }
+    if (hide && !cursor_hidden) {
+        SDL_HideCursor();
+        cursor_hidden = true;
+    } else if (show && cursor_hidden) {
+        SDL_ShowCursor();
+        cursor_hidden = false;
+    }
+}
+
+void WindowSDL::ApplyScreenMode() {
+    const auto& s = BbSettings::Get();
+    const int want = s.fullscreen ? 2 : s.maximized ? 1 : 0;
+    if (want == screen_mode || hidden_window) return;
+    screen_mode = want;
+    if (want == 2) {
+        SDL_SetWindowFullscreen(window, true);
+        return;
+    }
+    SDL_SetWindowFullscreen(window, false);
+    if (want == 1) {
+        SDL_MaximizeWindow(window);
+    } else {
+        SDL_RestoreWindow(window);
+    }
 }
 
 } // namespace Frontend

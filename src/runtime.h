@@ -24,6 +24,13 @@ typedef sigjmp_buf RuntimeRecoverBuf;
 extern __thread RuntimeRecoverBuf *runtime_fault_recover;
 /* Restarts the game (in-game settings menu, render resolution change). */
 void runtime_restart(void);
+/* Native menu rows (runtime_menu.c): rewrites guest call sites before the game starts. */
+unsigned runtime_menu_install(unsigned char *image, uint64_t image_size, unsigned char *stubs);
+/* Live effect switches (runtime_effects.c): hooks the render settings objects and starts the
+ * thread that applies effect changes while the game runs. Returns the hooks installed. */
+unsigned runtime_effects_install(unsigned char *image, uint64_t image_size, unsigned char *stubs);
+/* Our copy of menu files the native menus need (after runtime_file_configure). */
+void runtime_menu_files(const char *user_dir);
 #define ABI __attribute__((sysv_abi))
 typedef void (ABI *GuestCallback)(void);
 void runtime_start(uint64_t capabilities);

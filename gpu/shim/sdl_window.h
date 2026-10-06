@@ -7,6 +7,7 @@
 #include "common/types.h"
 
 struct SDL_Window;
+union SDL_Event;
 
 namespace Frontend {
 
@@ -28,6 +29,7 @@ public:
     SDL_Window* GetSDLWindow() const { return window; }
     WindowSystemInfo GetWindowInfo() const { return window_info; }
     bool IsOpen() const { return is_open.load(std::memory_order_relaxed); }
+    bool IsMinimized() const { return is_minimized.load(std::memory_order_relaxed); }
     /// Processes pending window events. Returns false once the user closed the window.
     bool PollEvents();
     /// Keyboard text entry for the system IME dialog; typed text shows in the title bar.
@@ -41,11 +43,20 @@ public:
 private:
     std::atomic<s32> width, height;
     std::atomic<bool> is_open{true};
+    std::atomic<bool> is_minimized{false};
     std::mutex text_mutex;
     bool text_requested{}, text_active{}, text_stop_requested{};
     int text_state{};
     std::string text, text_prompt, base_title;
     void UpdateTextTitle();
+    /// Cursor hiding (hide_cursor): shown on mouse motion, hidden after a pause or a pad input.
+    void UpdateCursor(const union SDL_Event* event);
+    u64 last_mouse_motion_ms{};
+    bool cursor_hidden{};
+    /// Screen mode (fullscreen, maximized settings): 0 window, 1 maximised, 2 full screen.
+    void ApplyScreenMode();
+    int screen_mode{};
+    bool hidden_window{};
     SDL_Window* window{};
     WindowSystemInfo window_info{};
 };
