@@ -301,3 +301,9 @@ const char* LaunchLabel(int launch) {
 }
 
 } // namespace BbSettings
+
+// bbport: the control channel's "set <key> <value>" (src/runtime_control.c): one bbport.ini
+// setting applied while the game runs, as the in-game menus change it (not saved).
+extern "C" void bbgpu_set_setting(const char* key, const char* value) {
+    BbSettings::Set(BbSettings::Get(), key, value);
+}
