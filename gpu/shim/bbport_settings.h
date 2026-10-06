@@ -52,6 +52,10 @@ inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840};
 inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160};
 inline constexpr int OutputCount = 4;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
+/// Frame rate limits (frame_limit, FPS; 0: the display refresh rate). The uncapped frame rate
+/// preset keeps the game's timing up to 120 FPS.
+inline constexpr int FrameLimits[] = {0, 30, 60, 90, 120};
+inline constexpr int FrameLimitCount = 5;
 
 struct Values {
     std::atomic<int> upscaler{UpscalerFsr3};
@@ -81,6 +85,7 @@ struct Values {
     std::atomic<int> live_resolution{0};
     /// Window and input (on start): a maximised window; gamepads read while unfocused.
     std::atomic<bool> maximized{true};
+    std::atomic<int> frame_limit{0}; ///< FPS, 0: display refresh rate (at most 120)
     std::atomic<bool> background_gamepad{true};
     /// Mouse cursor hidden after 500 ms without motion, or at once on gamepad input.
     std::atomic<bool> hide_cursor{true};
