@@ -478,8 +478,8 @@ def cmd_enrich(args):
     # modules.csv -> func: pick smallest function_count (most specific)
     mod_of, mod_n = {}, {}
     for row in csv.DictReader(open(os.path.join(RESEARCH, "strings",
-                                                "modules.csv")),
-                              encoding="utf-8"):
+                                                "modules.csv"),
+                                   encoding="utf-8")):
         try:
             fc = int(row["function_count"])
         except ValueError:
