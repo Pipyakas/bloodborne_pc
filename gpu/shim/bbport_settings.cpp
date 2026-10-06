@@ -2,6 +2,7 @@
 #include "bbport_settings.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -32,6 +33,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         }
     } else if (key == "preset") {
         v.preset = std::clamp(i, 0, PresetCount - 1);
+    } else if (key == "render_percent") {
+        v.render_percent = i == 0 ? 0 : std::clamp(i, 50, 100);
     } else if (key == "dlss_model") {
         for (int m = 0; m < DlssModelCount; ++m) {
             if (value == DlssModels[m].key) {
@@ -159,6 +162,7 @@ void Load() {
         }
     }
     v.startup_preset = v.preset;
+    v.startup_render_percent = v.render_percent;
     v.startup_upscaler = v.upscaler;
     v.startup_object_motion = v.object_motion;
     for (int e = 0; e < EffectCount; ++e) {
@@ -196,15 +200,33 @@ bool FixedRenderSession() {
 
 int RenderPreset() {
     const auto& v = Get();
-    return FixedRenderSession() ? v.startup_preset :
-        v.upscaler == UpscalerTaa ? NativeAA : v.preset.load();
+    if (FixedRenderSession()) return v.startup_preset;
+    if (v.upscaler == UpscalerTaa) return NativeAA;
+    if (!v.render_percent) return v.preset.load();
+    int nearest = NativeAA;
+    for (int p = 1; p < PresetCount; ++p) {
+        if (std::abs(100.0f / PresetScale(p) - v.render_percent.load()) <
+            std::abs(100.0f / PresetScale(nearest) - v.render_percent.load())) nearest = p;
+    }
+    return nearest;
+}
+
+float RenderPercent() {
+    const auto& v = Get();
+    const bool fixed = FixedRenderSession();
+    const int upscaler = fixed ? v.startup_upscaler : v.upscaler.load();
+    if (upscaler == UpscalerOff || upscaler == UpscalerTaa) return 100.0f;
+    const int percent = fixed ? v.startup_render_percent : v.render_percent.load();
+    return percent ? float(std::clamp(percent, 50, 100)) :
+        100.0f / PresetScale(fixed ? v.startup_preset : v.preset.load());
 }
 
 bool ResolutionNeedsRestart() {
     const auto& v = Get();
     // TAA needs the live path (native guest targets): run.sh selects it on restart.
     return FixedRenderSession() &&
-        (v.preset != v.startup_preset || v.output_res != v.startup_output_res ||
+        (v.preset != v.startup_preset || v.render_percent != v.startup_render_percent ||
+          v.output_res != v.startup_output_res ||
          (v.upscaler == UpscalerOff) != (v.startup_upscaler == UpscalerOff) ||
          (v.upscaler == UpscalerTaa) != (v.startup_upscaler == UpscalerTaa));
 }
@@ -230,6 +252,7 @@ void Save() {
                  v.debug_view.load(), int(v.show_fps.load()),
                  int(v.fsr4_auto_exposure.load()), int(v.fsr4_invert_jitter.load()));
     // Read by patches.py at start.
+    std::fprintf(file, "render_percent=%d\n", v.render_percent.load());
     for (int e = 0; e < EffectCount; ++e) {
         std::fprintf(file, "%s=%d\n", Effects[e].key, int(v.effects[e].load()));
     }

@@ -395,10 +395,18 @@ void Menu() {
                           int(std::lround(BbSettings::OutputWidths[output] / scale / 2) * 2),
                           int(std::lround(BbSettings::OutputHeights[output] / scale / 2) * 2));
             if (ImGui::Selectable(label, i == preset)) {
+                Store(s.render_percent, 0, true);
                 Store(s.preset, i, true);
             }
         }
         ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    ImGui::BeginDisabled(taa);
+    int render_percent = s.render_percent ? s.render_percent.load() :
+        int(std::lround(100.0f / BbSettings::PresetScale(s.preset)));
+    if (ImGui::SliderInt("Render resolution", &render_percent, 50, 100, "%d%%")) {
+        Store(s.render_percent, std::clamp(render_percent, 50, 100), true);
     }
     ImGui::EndDisabled();
     if (taa) {

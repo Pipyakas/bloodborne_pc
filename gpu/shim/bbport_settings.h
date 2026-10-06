@@ -88,6 +88,8 @@ struct Values {
     // Defaults: DLSS (FSR 3.1 where it is unavailable), Performance, CNN model, 4x generation.
     std::atomic<int> upscaler{UpscalerDlss};
     std::atomic<int> preset{Performance};
+    /// Custom render percentage (50..100); 0 preserves the legacy quality preset.
+    std::atomic<int> render_percent{0};
     std::atomic<bool> sharpen{true};
     std::atomic<float> sharpness{0.3f};
     std::atomic<bool> jitter{true};
@@ -147,6 +149,7 @@ struct Values {
 
     /// Startup settings for the explicit BB_RENDER_RES compatibility patch only.
     int startup_preset = Performance;
+    int startup_render_percent = 0;
     int startup_upscaler = UpscalerDlss;
     bool startup_object_motion = true;
     bool startup_effects[EffectCount]{};
@@ -167,6 +170,8 @@ void ConfigureUpscalerSupport(bool fsr4, bool fsr411, bool dlss);
 /// Startup-patched scene dimensions cannot change until run.sh prepares a new image.
 bool FixedRenderSession();
 int RenderPreset();
+/// Effective linear render percentage; Off/TAA remain native resolution.
+float RenderPercent();
 bool ResolutionNeedsRestart();
 /// Writes the file (menu changes).
 void Save();

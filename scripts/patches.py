@@ -82,14 +82,24 @@ def read_settings(path):
     return settings
 
 
+def render_scale(settings):
+    """Output/render divisor: a custom percentage overrides legacy quality presets."""
+    if settings.get('upscaler', 'dlss') in ('off', 'taa'):
+        return 1.0
+    percent=int(settings.get('render_percent', '0') or 0)
+    if percent:
+        return 100.0/max(50, min(percent, 100))
+    preset=int(settings.get('preset', '3') or 0)
+    return PRESET_SCALES[max(0, min(preset, len(PRESET_SCALES)-1))]
+
+
 def render_size(settings,override=''):
     """Render resolution for the upscaler preset, or None for native."""
     if override:
         w,h=(int(v) for v in override.lower().split('x'))
         return (w,h)
     if settings.get('upscaler','dlss')=='off': return None
-    preset=int(settings.get('preset','3') or 0)
-    scale=PRESET_SCALES[max(0,min(preset,len(PRESET_SCALES)-1))]
+    scale=render_scale(settings)
     if scale==1.0: return None
     # Even sizes (the game has half-resolution buffers).
     return tuple(max(2,round(v/scale/2)*2) for v in OUTPUT_SIZE)
@@ -111,10 +121,7 @@ def scaled_sizes(settings):
     upscaler fills the output. None at 1080p and for TAA (native, live host targets only)."""
     out=output_size(settings)
     if out==OUTPUT_SIZE or settings.get('upscaler')=='taa': return None
-    scale=1.0
-    if settings.get('upscaler','dlss')!='off':
-        preset=int(settings.get('preset','3') or 0)
-        scale=PRESET_SCALES[max(0,min(preset,len(PRESET_SCALES)-1))]
+    scale=render_scale(settings)
     render=tuple(max(2,round(v/scale/2)*2) for v in out)
     # A scene of exactly 1920x1080 (4K Performance) is indistinguishable from the game's UI
     # coordinate space, which the port's UI composition recognizes by that size.
