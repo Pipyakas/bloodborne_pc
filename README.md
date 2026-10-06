@@ -250,10 +250,16 @@ again to change the settings; Save settings writes them without building. It nee
 Windows: `setup.bat` compiles `tools\setup\BbportSetup.cs` with the C# compiler of .NET Framework
 4 into `out\bbport-setup.exe`. The steps below do the same by hand.
 
+**First launch:** when no game folder is known yet (none given, none remembered in
+`out\game_dir.txt`), `run.bat` first opens the first-launch screen of `bb-probe.exe`
+(`--first-run`): choose the game folder, or the game's .pkg files and where to install them
+(next to the executable by default, or another folder); the game then starts from that folder.
+Agent runs (`BB_HIDDEN=1` / `BB_MINIMIZED=1`) and `BB_FIRST_RUN=0` skip it.
+
 **From .pkg files:** without a dump, *Install from .pkg files...* in the setup window installs
 the game from its package and the 1.09 update package (fake-signed packages, as shadPS4
 installs) into `<chosen folder>\CUSA…`, which becomes the game folder: the game first, then the
-update's files over it, ~32 GB, about a minute on an SSD. `out\bbport-pkg.exe` does the same
+update's files over it, ~32 GB, about a minute on an SSD. `out\bbport-pkg.exe` (built by `build.sh` and `setup.bat`) does the same
 from a command line (`bbport-pkg install <folder> <game.pkg> <update.pkg>`, `bbport-pkg info
 <pkg>`). The installer (`tools\setup\PkgInstall.cs`) is a C# port of the orbis-pkg, orbis-pfs
 and orbis-pkg-util crates (MIT/Apache-2.0) that shadps4-game-manager uses; delta updates and

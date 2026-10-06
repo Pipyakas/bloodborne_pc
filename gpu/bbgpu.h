@@ -35,6 +35,10 @@ int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
  * confirmed (0 when none is open); 1 while one is open. */
 int bbgpu_text_input_submit(const char *text_utf8);
 int bbgpu_text_input_active(void);
+/* bb-probe --first-run <result file>: the first-launch screen (gpu/shim/bbport_first_run.cpp)
+ * that asks for the game folder or installs the game's .pkg files; 0 with the folder written
+ * to result_path, 1 when the user quit. */
+int bbgpu_first_run(const char *result_path);
 /* Frames presented since start. */
 uint64_t bbgpu_present_count(void);
 /* Writes the next presented frame (the game's picture with its HUD, without the settings menu)

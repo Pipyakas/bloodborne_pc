@@ -6,7 +6,8 @@ out/bb-probe.exe. Same environment variables and bbport.ini settings as run.sh.
     run.bat [--game-dir DIR] [bb-probe options...]
 
 The game folder: --game-dir, else BB_GAME_DIR, else the last one used (out/game_dir.txt), else
-../CUSA03173 (as run.sh). Unless BB_PREBUILT=1
+../CUSA03173 (as run.sh). When none of them holds the game, the first-launch screen
+(bb-probe --first-run) asks for the folder or installs the game's .pkg files. Unless BB_PREBUILT=1
 the port is (re)built first through MSYS2 (build.sh in the CLANG64 environment)."""
 import os
 from pathlib import Path
@@ -41,6 +42,31 @@ def build():
     run([bash, '-lc', 'bash build.sh'], env=env)
 
 
+def with_msys_path(env):
+    """MSYS2's DLLs (libc++, SDL3, FFmpeg, ...). System32 is searched before PATH, so the
+    Vulkan loader stays the one installed with the GPU driver."""
+    return dict(env, PATH=os.pathsep.join([str(msys_root() / 'clang64/bin'), env.get('PATH', '')]))
+
+
+def first_run(out):
+    """No game folder yet: bb-probe's first-launch screen (gpu/shim/bbport_first_run.cpp) asks
+    for it, or installs the game's .pkg files; the folder, or None when the user quit. Agent runs
+    (hidden or minimized) get no screen unless BB_FIRST_RUN_SCRIPT drives it."""
+    background = os.environ.get('BB_HIDDEN') == '1' or os.environ.get('BB_MINIMIZED') == '1'
+    if os.environ.get('BB_FIRST_RUN') == '0' or (background and not os.environ.get('BB_FIRST_RUN_SCRIPT')):
+        return None
+    probe = ROOT / os.environ.get('BB_PROBE', out / 'bb-probe.exe')
+    if not probe.is_file():
+        return None
+    result = out / 'first_run.txt'
+    result.unlink(missing_ok=True)
+    print('No game folder yet: first-launch screen', flush=True)
+    status = subprocess.call([str(probe), '--first-run', str(result)], cwd=ROOT, env=with_msys_path(os.environ))
+    if status != 0 or not result.is_file():
+        return None
+    return Path(result.read_text(encoding='utf-8').strip())
+
+
 def settings_value(config, key):
     if not config.is_file():
         return None
@@ -65,9 +91,16 @@ def main():
         os.environ['BB_FSR411_DIR'] = str(data / 'fsr4_411')
     # The last folder that worked is remembered, so run.bat alone starts the game afterwards.
     remembered = out / 'game_dir.txt'
+    chosen = bool(game)  # given explicitly: an error rather than the first-launch screen
     if not game and remembered.is_file():
         game = remembered.read_text(encoding='utf-8').strip()
     game = Path(game) if game else ROOT.parent / 'CUSA03173'
+    prebuilt = os.environ.get('BB_PREBUILT') == '1'
+    if not (game / 'eboot.bin').is_file() and not chosen:
+        if not prebuilt:
+            build()  # the screen is part of bb-probe
+            prebuilt = True
+        game = first_run(out) or game
     if not (game / 'eboot.bin').is_file():
         sys.exit(f'No eboot.bin in {game} (pass --game-dir or set BB_GAME_DIR).')
     original = game.resolve()
@@ -95,14 +128,14 @@ def main():
             sizes = run([PYTHON, SCRIPTS / 'patches.py', '--print-scaled', '--settings', config], capture=True, check=False)
             if sizes and len(sizes.split()) == 2:
                 scaled_render, scaled_output = sizes.split()
-        prebuilt = os.environ.get('BB_PREBUILT') == '1'
         if not prebuilt:
             build()
         live = '0'
         if scaled_output:
             live = os.environ.get('BB_LIVE_RES') or settings_value(config, 'live_resolution') or 'auto'
             if live == 'auto':
-                caps = out / 'bb-gpu-capabilities.exe'
+                # Built next to bb-probe.exe (the data directory's out\ need not hold executables).
+                caps = (ROOT / os.environ.get('BB_PROBE', out / 'bb-probe.exe')).with_name('bb-gpu-capabilities.exe')
                 live = run([caps, '--live-resolution'], capture=True, check=False) or '0'
             live = '1' if live == '1' else '0'
         if live == '1':
@@ -123,9 +156,7 @@ def main():
                    '--patches', out / 'patches.bin', '--app0', merged,
                    '--user', os.environ.get('BB_USER_DIR', data / 'user'),
                    '--timeout', os.environ.get('BB_TIMEOUT', '0'), *arguments]
-        # MSYS2's DLLs (libc++, SDL3, FFmpeg, ...). System32 is searched before PATH, so the
-        # Vulkan loader stays the one installed with the GPU driver.
-        os.environ['PATH'] = os.pathsep.join([str(msys_root() / 'clang64/bin'), os.environ.get('PATH', '')])
+        os.environ['PATH'] = with_msys_path(os.environ)['PATH']
         print('Starting:', ' '.join(shlex.quote(str(c)) for c in command), flush=True)
         try:
             status = subprocess.call([str(c) for c in command], cwd=ROOT)

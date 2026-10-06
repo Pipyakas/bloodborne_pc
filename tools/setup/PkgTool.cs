@@ -7,11 +7,14 @@
 using System;
 using System.Diagnostics;
 using System.Linq;
+using System.Text;
 
 namespace BbportSetup {
 
 static class PkgTool {
     static int Main(string[] args) {
+        // Piped (the first-launch screen reads it): UTF-8, whatever the console code page.
+        if (Console.IsOutputRedirected) Console.OutputEncoding = new UTF8Encoding(false);
         try {
             if (args.Length >= 2 && args[0] == "info") {
                 foreach (string path in args.Skip(1)) {

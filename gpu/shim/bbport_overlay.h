@@ -48,4 +48,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);
 /// The menu or the text dialog is open: the game's input is held neutral.
 bool CapturesInput();
 
+/// The embedded UI font (DejaVu Sans), also used by the first-launch screen.
+void FontData(const unsigned char** data, int* size);
+
 } // namespace BbOverlay
