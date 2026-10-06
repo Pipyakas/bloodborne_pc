@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -65,6 +67,10 @@ const char16_t* const UpscalerLabels[BbSettings::UpscalerCount] = {
     u"Off", u"FSR 3.1", u"FSR 4", u"FSR 4.1.1", u"TAA", u"DLSS"};
 std::array<const char16_t*, BbSettings::UpscalerCount> upscaler_labels{};
 
+// The presets, then Dynamic (dynamic_resolution: it replaces the preset's fixed size).
+const char16_t* const PresetLabels[] = {u"Native", u"Quality", u"Balanced", u"Performance",
+                                        u"Ultra Performance", u"Dynamic"};
+static_assert(std::size(PresetLabels) == BbSettings::PresetCount + 1);
 const char16_t* const OutputLabels[] = {u"1280 x 720", u"1920 x 1080", u"2560 x 1440",
                                         u"3840 x 2160"};
 // Screen mode: the "fullscreen" and "maximized" settings (fullscreen wins).
@@ -79,6 +85,41 @@ static_assert(std::size(DlssModelLabels) == BbSettings::DlssModelCount);
 const char16_t* const FrameGenLabels[] = {u"Off", u"2x", u"3x (multi frame)", u"4x (multi frame)",
                                           u"Dynamic (multi frame)"};
 static_assert(std::size(FrameGenLabels) == BbSettings::FrameGenCount);
+
+// render_scale's choices. The game's lists hold at most 32 entries: 5% .. 100% in steps of 5,
+// then 110% .. 200% in steps of 10 (the F1 menu has every step of 5).
+constexpr int RenderScaleCount = 30;
+constexpr int RenderScaleValue(int i) {
+    return i < 20 ? 5 + i * 5 : 100 + (i - 19) * 10;
+}
+int RenderScaleIndex(int percent) {
+    int best = 0;
+    for (int i = 1; i < RenderScaleCount; ++i) {
+        if (std::abs(RenderScaleValue(i) - percent) < std::abs(RenderScaleValue(best) - percent)) {
+            best = i;
+        }
+    }
+    return best;
+}
+const auto render_scale_text = [] {
+    std::array<std::u16string, RenderScaleCount> text;
+    for (int i = 0; i < RenderScaleCount; ++i) {
+        const std::string percent = std::to_string(RenderScaleValue(i)) + "%";
+        text[i] = std::u16string(percent.begin(), percent.end());
+    }
+    return text;
+}();
+// The percentages, then Dynamic (31 entries).
+const auto render_scale_labels = [] {
+    std::array<const char16_t*, RenderScaleCount + 1> labels{};
+    for (int i = 0; i < RenderScaleCount; ++i) labels[i] = render_scale_text[i].c_str();
+    labels[RenderScaleCount] = u"Dynamic";
+    return labels;
+}();
+
+bool HasPresets(const Values& v) {
+    return v.upscaler != BbSettings::UpscalerOff && v.upscaler != BbSettings::UpscalerTaa;
+}
 
 // The Upscaler row's default: the entry of the settings' default (DLSS, else FSR 3.1).
 constexpr int UpscalerDefault = -1;
@@ -143,14 +184,34 @@ const Row rows[] = {
          *out = upscaler_labels.data();
          return upscaler_count;
      }},
-    {BB_NATIVE_UPSCALING, u"Render resolution (50-100%)",
-      u"Scale of output resolution: 0 is 50%, 10 is 100%, each step is 5%. Applies immediately with FSR or DLSS. Off and TAA render at 100%.",
-      Slider, [](const Values& v) {
-          const float percent = v.render_percent ? float(v.render_percent.load()) :
-              100.0f / BbSettings::PresetScale(v.preset);
-          return std::clamp(int(std::lround((percent - 50.0f) / 5.0f)), 0, 10);
-      },
-      [](Values& v, int i) { v.render_percent = 50 + std::clamp(i, 0, 10) * 5; }, 0},
+    {BB_NATIVE_UPSCALING, u"Upscaling quality",
+     u"Native renders at the output resolution. Dynamic lowers it while the GPU misses the frame rate limit.",
+     Choice,
+     [](const Values& v) { return v.dynamic_resolution ? BbSettings::PresetCount : v.preset.load(); },
+     [](Values& v, int i) {
+         v.dynamic_resolution = i >= BbSettings::PresetCount;
+         if (i < BbSettings::PresetCount) v.preset = std::max(i, 0);
+     },
+     BbSettings::Performance, [](const char16_t* const** out) { return Labels(PresetLabels, out); },
+     [](const Values& v) { return HasPresets(v); }},
+    // The screen has five row slots: this row takes the quality row's place with upscaling off
+    // or TAA (which row shows is decided when the screen opens).
+    {BB_NATIVE_UPSCALING, u"Render resolution",
+     u"Percent of the output resolution (above 100% supersamples). Dynamic follows the frame rate limit.",
+     Choice,
+     [](const Values& v) {
+         return v.dynamic_resolution ? RenderScaleCount : RenderScaleIndex(v.render_scale);
+     },
+     [](Values& v, int i) {
+         v.dynamic_resolution = i >= RenderScaleCount;
+         if (i < RenderScaleCount) v.render_scale = RenderScaleValue(std::max(i, 0));
+     },
+     RenderScaleIndex(100),
+     [](const char16_t* const** out) {
+         *out = render_scale_labels.data();
+         return RenderScaleCount + 1;
+     },
+     [](const Values& v) { return !HasPresets(v); }},
     {BB_NATIVE_UPSCALING, u"DLSS model", u"DLSS 3 CNN is the lightest; the transformer models are sharper and heavier.",
      Choice, [](const Values& v) { return v.dlss_model.load(); },
      [](Values& v, int i) { v.dlss_model = std::clamp(i, 0, BbSettings::DlssModelCount - 1); }, 1,
@@ -187,6 +248,11 @@ std::array<BbNativeSetting, RowCount> table{};
 // One aligned int32 per row: the game's choice rows write all four bytes.
 std::array<int32_t, RowCount> values{}, applied{}, defaults{};
 bool open_once = false;
+// The Upscaling screen shows "Upscaling quality" or "Render resolution" by the upscaler when it
+// opens. An upscaler change that needs the other row reopens the screen: the pad presses
+// Circle (the screen closes and applies) and then Cross on the Graphics list's Upscaling row,
+// counted in pad reads (runtime_pad.c asks bbgpu_native_menu_press each read).
+std::atomic<int> reopen_reads{-1};
 // The game's "dropdown open" bytes of the open screen's choice rows (guest memory).
 std::array<const volatile uint8_t*, RowCount> dropdown_open{};
 // The open screen's rows (copies of table entries) and their places in rows[].
@@ -277,9 +343,15 @@ void Apply(bool choices) {
         if (now != applied[r] && settled) {
             std::printf("Settings: game menu: %s %d -> %d\n", Ascii(rows[r].label).c_str(),
                         applied[r], now);
+            const bool presets = HasPresets(v);
             applied[r] = now;
             rows[r].set(v, now);
             changed = true;
+            if (!choices && HasPresets(v) != presets) {
+                std::printf("Settings: game menu: reopening Upscaling for its %s row\n",
+                            HasPresets(v) ? "quality" : "render resolution");
+                reopen_reads = 0;
+            }
         }
     }
     if (changed) {
@@ -298,7 +370,21 @@ void ForgetDropdowns() {
     dropdown_open.fill(nullptr); // the screen and its widgets are gone
 }
 
+int MenuPress() {
+    const int read = reopen_reads.load();
+    if (read < 0) return 0;
+    // Circle for 3 reads, then the close (half a second at 60 reads/s), then Cross for 3.
+    reopen_reads = read >= 33 ? -1 : read + 1;
+    if (read < 3) return 1;
+    if (read >= 30 && read < 33) return 2;
+    return 0;
+}
+
 } // namespace BbNative
+
+extern "C" int bbgpu_native_menu_press(void) {
+    return BbNative::MenuPress();
+}
 
 extern "C" int bbgpu_native_settings(int32_t screen, const BbNativeSetting** rows) {
     return BbNative::Rows(screen, rows);
@@ -309,7 +395,7 @@ extern "C" const uint16_t* bbgpu_native_screen_text(int32_t screen, int32_t whic
         {u"Screen", u"Screen mode, resolution and frame rate."},
         {u"Advanced options", u"Motion blur, depth of field and other effects."},
         {u"Upscaling", u"Upscaler, render resolution and sharpening."},
-        {u"Graphics", u"Screen, graphics quality and upscaling."},
+        {u"Graphics", u"Screen, upscaling and graphics effects."},
     };
     return reinterpret_cast<const uint16_t*>(texts[std::clamp(int(screen), 0, int(BB_NATIVE_SCREENS))][which & 1]);
 }

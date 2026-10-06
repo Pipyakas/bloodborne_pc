@@ -47,6 +47,10 @@ public:
     }
 
     /// Both cameras and the scene depth of the current frame are known.
+    /// The frame OnDisplayPass ended drew the 3D scene (not a menu or loading screen).
+    [[nodiscard]] bool LastFrameHadCamera() const noexcept {
+        return last_frame_had_camera;
+    }
     [[nodiscard]] bool Ready() const noexcept {
         return current.valid && previous.valid && depth_id;
     }
@@ -112,6 +116,7 @@ private:
     ObjectMotion* object_motion = nullptr;
     Camera current, previous;
     bool frame_has_camera = false;
+    bool last_frame_had_camera = false;
     std::array<float, 2> jitter{}, previous_jitter{};
     std::array<u32, 2> render_size{};
     VideoCore::ImageId depth_id{};

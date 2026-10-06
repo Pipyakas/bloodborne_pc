@@ -83,13 +83,13 @@ inline constexpr int OutputDefault = 2; ///< 2560x1440 (index 1, 1920x1080, is t
 /// preset keeps the game's timing up to 120 FPS.
 inline constexpr int FrameLimits[] = {0, 30, 60, 90, 120};
 inline constexpr int FrameLimitCount = 5;
+/// render_scale: 5..200% in steps of 5.
+inline constexpr int RenderScaleMin = 5, RenderScaleMax = 200, RenderScaleStep = 5;
 
 struct Values {
     // Defaults: DLSS (FSR 3.1 where it is unavailable), Performance, CNN model, 4x generation.
     std::atomic<int> upscaler{UpscalerDlss};
     std::atomic<int> preset{Performance};
-    /// Custom render percentage (50..100); 0 preserves the legacy quality preset.
-    std::atomic<int> render_percent{0};
     std::atomic<bool> sharpen{true};
     std::atomic<float> sharpness{0.3f};
     std::atomic<bool> jitter{true};
@@ -108,6 +108,10 @@ struct Values {
     std::atomic<bool> fsr4_auto_exposure{true};
     std::atomic<bool> fsr4_invert_jitter{false};
     std::atomic<int> active_render_width{1920}, active_render_height{1080};
+    /// The temporal upscaler ran on the last frame (menus and loading screens skip it).
+    std::atomic<bool> upscaler_ran{false};
+    /// The last frame drew the 3D scene (not a menu or loading screen).
+    std::atomic<bool> scene_frame{false};
     /// Applied at start (patches.py); the menu shows when a restart is needed.
     std::atomic<bool> effects[EffectCount]{};
     std::atomic<int> model_lod{0}; ///< -2 highest .. 2 lowest, 0 the game's
@@ -121,6 +125,18 @@ struct Values {
     /// Window and input (on start): a maximised window; gamepads read while unfocused.
     std::atomic<bool> maximized{true};
     std::atomic<int> frame_limit{0}; ///< FPS, 0: display refresh rate (at most 120)
+    /// Render resolution in percent of the output for the modes without presets (upscaler off,
+    /// TAA): 5..200 in steps of 5; above 100 supersamples.
+    std::atomic<int> render_scale{100};
+    /// Dynamic resolution, replacing the preset (or a render_scale below 100): while the GPU
+    /// misses the frame rate target, the render resolution drops (1% steps or more) until the CPU
+    /// limits the frame rate (or a step saves no GPU time); it rises again while the GPU has
+    /// headroom, up to 100% of the output (render_scale above 100: that).
+    std::atomic<bool> dynamic_resolution{false};
+    /// Set by the renderer: the dynamic resolution in percent of the output (0: not active),
+    /// and the GPU's busy time per rendered frame (ms, 0 before the first measurement).
+    std::atomic<int> dynamic_percent{0};
+    std::atomic<float> gpu_frame_ms{0.0f};
     std::atomic<bool> background_gamepad{true};
     /// Mouse cursor hidden after 500 ms without motion, or at once on gamepad input.
     std::atomic<bool> hide_cursor{true};
@@ -149,7 +165,6 @@ struct Values {
 
     /// Startup settings for the explicit BB_RENDER_RES compatibility patch only.
     int startup_preset = Performance;
-    int startup_render_percent = 0;
     int startup_upscaler = UpscalerDlss;
     bool startup_object_motion = true;
     bool startup_effects[EffectCount]{};
@@ -170,8 +185,6 @@ void ConfigureUpscalerSupport(bool fsr4, bool fsr411, bool dlss);
 /// Startup-patched scene dimensions cannot change until run.sh prepares a new image.
 bool FixedRenderSession();
 int RenderPreset();
-/// Effective linear render percentage; Off/TAA remain native resolution.
-float RenderPercent();
 bool ResolutionNeedsRestart();
 /// Writes the file (menu changes).
 void Save();

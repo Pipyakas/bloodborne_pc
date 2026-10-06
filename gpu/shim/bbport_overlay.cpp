@@ -379,39 +379,71 @@ void Menu() {
     }
     const bool upscaler_on = s.upscaler != BbSettings::UpscalerOff;
     const bool taa = s.upscaler == BbSettings::UpscalerTaa;
+    if (!upscaler_on || taa) {
+        // No presets: the render resolution is a percentage of the output.
+        int scale = s.render_scale;
+        const bool changed = ImGui::SliderInt("Render resolution", &scale, BbSettings::RenderScaleMin,
+                                              BbSettings::RenderScaleMax, "%d%%");
+        scale = std::clamp((scale + BbSettings::RenderScaleStep / 2) / BbSettings::RenderScaleStep *
+                               BbSettings::RenderScaleStep,
+                           BbSettings::RenderScaleMin, BbSettings::RenderScaleMax);
+        Store(s.render_scale, scale, changed);
+        Hint("Percent of the output resolution the scene renders at, in steps of 5. Below 100 "
+             "it renders fewer pixels and is scaled up (soft); above 100 it renders more and "
+             "is scaled down (supersampling, sharper, much more GPU time). The HUD and menus "
+             "stay at the output resolution.");
+        ImGui::SameLine();
+        Checkbox("Dynamic", s.dynamic_resolution);
+        Hint("Dynamic: while the GPU cannot reach the frame rate limit, the scene's render resolution "
+             "drops in steps of 1% or more; it rises again while the GPU has headroom, up to 100% of the "
+             "output. It stops lowering when the CPU limits the frame rate, or when a step no "
+             "longer saves GPU time. Each change is a short pause." " A render resolution above 100% stays the top.");
+    }
     ImGui::BeginDisabled(!upscaler_on);
-    ImGui::BeginDisabled(taa);
-    int preset = taa ? BbSettings::NativeAA : s.preset.load();
-    char preset_label[64];
-    std::snprintf(preset_label, sizeof(preset_label), "%s (x%.1f)", BbSettings::PresetName(preset),
-                  BbSettings::PresetScale(preset));
-    if (ImGui::BeginCombo("Preset", preset_label)) {
-        for (int i = 0; i < BbSettings::PresetCount; ++i) {
-            char label[64];
-            const float scale = BbSettings::PresetScale(i);
-            const int output = s.output_res;
-            std::snprintf(label, sizeof(label), "%s (x%.1f, render %dx%d)",
-                          BbSettings::PresetName(i), scale,
-                          int(std::lround(BbSettings::OutputWidths[output] / scale / 2) * 2),
-                          int(std::lround(BbSettings::OutputHeights[output] / scale / 2) * 2));
-            if (ImGui::Selectable(label, i == preset)) {
-                Store(s.render_percent, 0, true);
-                Store(s.preset, i, true);
-            }
+    // The upscalers' levels; with upscaling off or TAA the render resolution above takes
+    // this place (the same setting: the scene's size).
+    if (upscaler_on && !taa) {
+        int preset = s.preset.load();
+        const bool dynamic = s.dynamic_resolution.load();
+        char preset_label[64];
+        if (dynamic) {
+            std::snprintf(preset_label, sizeof(preset_label), "Dynamic");
+        } else {
+            std::snprintf(preset_label, sizeof(preset_label), "%s (x%.1f)",
+                          BbSettings::PresetName(preset), BbSettings::PresetScale(preset));
         }
-        ImGui::EndCombo();
+        if (ImGui::BeginCombo("Preset", preset_label)) {
+            for (int i = 0; i < BbSettings::PresetCount; ++i) {
+                char label[64];
+                const float scale = BbSettings::PresetScale(i);
+                const int output = s.output_res;
+                std::snprintf(label, sizeof(label), "%s (x%.1f, render %dx%d)",
+                              BbSettings::PresetName(i), scale,
+                              int(std::lround(BbSettings::OutputWidths[output] / scale / 2) * 2),
+                              int(std::lround(BbSettings::OutputHeights[output] / scale / 2) * 2));
+                if (ImGui::Selectable(label, !dynamic && i == preset)) {
+                    Store(s.preset, i, true);
+                    Store(s.dynamic_resolution, false, true);
+                }
+            }
+            // Dynamic resolution replaces the presets' fixed sizes.
+            if (ImGui::Selectable("Dynamic (follows the frame rate limit, up to native)", dynamic)) {
+                Store(s.dynamic_resolution, true, true);
+            }
+            ImGui::EndCombo();
+        }
+        Hint("Dynamic: while the GPU cannot reach the frame rate limit, the scene's render resolution "
+                 "drops in steps of 1% or more; it rises again while the GPU has headroom, up to 100% of the "
+                 "output. It stops lowering when the CPU limits the frame rate, or when a step no "
+                 "longer saves GPU time. Each change is a short pause.");
     }
-    ImGui::EndDisabled();
-    ImGui::BeginDisabled(taa);
-    int render_percent = s.render_percent ? s.render_percent.load() :
-        int(std::lround(100.0f / BbSettings::PresetScale(s.preset)));
-    if (ImGui::SliderInt("Render resolution", &render_percent, 50, 100, "%d%%")) {
-        Store(s.render_percent, std::clamp(render_percent, 50, 100), true);
+    if (s.dynamic_resolution) {
+        ImGui::Text("Dynamic resolution: %d%%, GPU %.1f ms per frame", s.dynamic_percent.load(),
+                    s.gpu_frame_ms.load());
     }
-    ImGui::EndDisabled();
     if (taa) {
-        ImGui::TextWrapped("TAA anti-aliases the scene at the output resolution, without an FSR "
-                           "model or upscaling. The saved preset returns when an upscaler is selected.");
+        ImGui::TextWrapped("TAA anti-aliases the scene at the render resolution above, without "
+                           "an FSR model. The saved preset returns when an upscaler is selected.");
     }
     ImGui::Text("Active scene render: %d x %d", s.active_render_width.load(),
                 s.active_render_height.load());
@@ -644,13 +676,22 @@ void FpsCounter() {
         ImGui::End();
         return;
     }
-    ImGui::Text("%.0f FPS  %.1f ms  %s", fps, frame_ms_avg,
-                s.upscaler == BbSettings::UpscalerFsr3   ? "FSR 3.1"
+    // The upscaler's name only while it runs: 2D menus and loading screens are presented as
+    // drawn, scaled to the window without it.
+    char dynamic[24] = "";
+    // Scene frames only (menus and loading screens are not scaled).
+    if (s.dynamic_resolution && s.dynamic_percent && s.scene_frame) {
+        std::snprintf(dynamic, sizeof(dynamic), "  %d%%", s.dynamic_percent.load());
+    }
+    ImGui::Text("%.0f FPS  %.1f ms  %s%s", fps, frame_ms_avg,
+                !s.upscaler_ran                          ? ""
+                : s.upscaler == BbSettings::UpscalerFsr3   ? "FSR 3.1"
                 : s.upscaler == BbSettings::UpscalerFsr4 ? "FSR 4"
                 : s.upscaler == BbSettings::UpscalerFsr411 ? "FSR 4.1.1"
                 : s.upscaler == BbSettings::UpscalerTaa ? "TAA"
                 : s.upscaler == BbSettings::UpscalerDlss ? "DLSS"
-                                                         : "");
+                                                         : "",
+                dynamic);
     ImGui::End();
 }
 

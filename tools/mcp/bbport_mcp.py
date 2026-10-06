@@ -455,7 +455,8 @@ def game_text(text):
 
 @tool('game_commands', 'Run raw control-channel commands in order (fewer round trips for '
       'scripted routes): "press <frames> <tokens>", "pad [tokens]", "wait <frames>", '
-      '"sleep <seconds>", "status". Stops at the first error.',
+      '"sleep <seconds>", "status", "set <bbport.ini key> <value>" (live, not saved). '
+      'Stops at the first error.',
       {'commands': {'type': 'array', 'items': {'type': 'string'}}}, ['commands'])
 def game_commands(commands):
     replies = []

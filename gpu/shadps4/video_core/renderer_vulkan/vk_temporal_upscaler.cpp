@@ -2,10 +2,12 @@
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "video_core/renderer_vulkan/motion_history.h"
+#include "video_core/renderer_vulkan/dynamic_resolution.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
 #include "video_core/renderer_vulkan/ui_composition.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -15,6 +17,7 @@
 #include <vk_mem_alloc.h>
 
 #include "bbport_settings.h"
+#include "core/emulator_settings.h"
 #include "bbport_toggles.h"
 #include "ffx_vk_portable.h"
 #include "video_core/host_shaders/upscale_merge_comp.h"
@@ -233,6 +236,10 @@ bool TemporalUpscaler::Active() const {
            !BbToggle::Disabled(1u << 24);
 }
 
+bool TemporalUpscaler::UsesNgx() const {
+    return dlss && BbSettings::Get().upscaler == BbSettings::UpscalerDlss;
+}
+
 bool TemporalUpscaler::ReactiveOn() const {
     // FSR 4 takes no reactive mask: the opaque snapshot and the mask pass would be wasted.
     return BbSettings::Get().reactive && !BbToggle::Disabled(1u << 27) && !UseFsr4() &&
@@ -289,9 +296,7 @@ bool TemporalUpscaler::OnFrameStart() {
     // The guest's startup resolution patch remains in effect until restart. Keep the FSR
     // model at the applied preset while the menu saves the requested one for run.sh.
     const int preset = BbSettings::RenderPreset();
-    const float render_percent = BbSettings::RenderPercent();
-    const bool render_changed = applied_render_percent != render_percent;
-    if (applied_preset != preset || render_changed || settings.upscaler == BbSettings::UpscalerOff) failed = false;
+    if (applied_preset != preset || settings.upscaler == BbSettings::UpscalerOff) failed = false;
     const bool active = Active();
     const bool jitter_on = active && settings.jitter && !BbToggle::Disabled(1u << 25);
     const int upscaler = settings.upscaler.load();
@@ -304,7 +309,7 @@ bool TemporalUpscaler::OnFrameStart() {
         failed = false;
         fsr4_failed = false;
     }
-    const bool changed = output_changed || render_changed || applied_preset != preset || active != last_active ||
+    const bool changed = output_changed || applied_preset != preset || active != last_active ||
                          jitter_on != last_jitter || applied_upscaler != upscaler;
     if (applied_upscaler != upscaler) {
         // A failed provider keeps a fatal flag internally; a user retry gets a fresh context.
@@ -315,22 +320,49 @@ bool TemporalUpscaler::OnFrameStart() {
     if (applied_upscaler != upscaler) fsr4_failed = false; // retry after a menu change
     // Dynamic scene resolution scaling (live preset switching) works on all GPUs.
     // On GPUs without D32S8 blit support, UI depth is cleared instead of copied from scene.
+    bool resized = false;
     if (!scaled_session) {
-        scene_targets.SetSize(SceneResolution::ForPercent(active ? render_percent : 100.0f,
-                                                        {target_width, target_height}));
+        // Upscalers render at their preset's size; upscaler off and TAA at render_scale
+        // percent of the output (above 100 supersamples). Dynamic resolution replaces both:
+        // from 100% of the output (render_scale above 100: that) down to whatever the GPU
+        // needs, until the CPU limits the frame rate.
+        const SceneResolution::Size output{target_width, target_height};
+        const bool presets = active && upscaler != BbSettings::UpscalerTaa;
+        const int scale = settings.render_scale.load();
+        const bool dynamic_on = settings.dynamic_resolution;
+        const int base_percent = dynamic_on ? (presets ? 100 : std::max(100, scale))
+                                 : presets  ? int(100.0f / BbSettings::PresetScale(preset))
+                                            : scale;
+        const auto max_render = dynamic_on || !presets
+                                    ? SceneResolution::ForScale(base_percent, output)
+                                    : SceneResolution::ForPreset(preset, output);
+        max_render_width = max_render.width;
+        max_render_height = max_render.height;
+        scene_targets.SetMaxSize(max_render);
+        if (changed) drs_useful_floor = 0; // another configuration: probe again
+        const int dynamic = UpdateDynamicResolution(
+            base_percent, upscaler == BbSettings::UpscalerDlss ? dlss_floor_percent
+                                                               : BbSettings::RenderScaleMin);
+        resized = scene_targets.SetSize(dynamic ? SceneResolution::ForScale(dynamic, output)
+                                                : max_render);
         render_width = scene_targets.Size().width;
         render_height = scene_targets.Size().height;
     }
     BbSettings::Get().active_render_width = Scaled() ? render_width : scene_targets.Size().width;
     BbSettings::Get().active_render_height = Scaled() ? render_height : scene_targets.Size().height;
-    if (changed || !dispatched_last_frame) reset = true;
+    // A dynamic resolution step keeps the upscalers' history (output size), not TAA's.
+    if (changed || (resized && upscaler == BbSettings::UpscalerTaa) || !dispatched_last_frame)
+        reset = true;
+    // A DRS resize keeps temporal reconstruction history; keep its sample
+    // sequence too. Restarting Halton on each adjustment makes edges shimmer.
     if (changed) jitter_index = 0;
     applied_preset = preset;
-    applied_render_percent = render_percent;
     applied_output = output;
     applied_upscaler = upscaler;
     last_active = active;
     last_jitter = jitter_on;
+    BbSettings::Get().upscaler_ran = dispatched_last_frame;
+    BbSettings::Get().scene_frame = camera_motion.LastFrameHadCamera();
     dispatched_last_frame = false;
 
     // The display pass of an upscaled frame reads the upscaled UI image.
@@ -346,7 +378,7 @@ bool TemporalUpscaler::OnFrameStart() {
     // Halton(2, 3); the menu or toggle 1 << 25 disables it.
     if (!jitter_on) {
         jitter = {};
-        return changed;
+        return changed || resized;
     }
     // CameraMotion::OnDisplayPass has already cleared Depth(). Use the context's render
     // size, which survives the frame boundary (Performance 960 -> 1920 needs 32 phases).
@@ -354,7 +386,149 @@ bool TemporalUpscaler::OnFrameStart() {
         : Motion::JitterPhases(scene_targets.Size().width, 1920);
     jitter_index = jitter_index % phases + 1;
     jitter = {Halton(jitter_index, 2) - 0.5f, Halton(jitter_index, 3) - 0.5f};
-    return changed;
+    return changed || resized;
+}
+
+int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percent) {
+    using namespace std::chrono;
+    auto& settings = BbSettings::Get();
+    const auto now = steady_clock::now();
+    drs_busy_ns += scheduler.TakeGpuBusyNs();
+    ++drs_frames;
+    const bool enabled = settings.dynamic_resolution && !scaled_session;
+    if (enabled && !drs_was_enabled) {
+        const int seed = applied_upscaler < 0
+                             ? (Active() && settings.upscaler != BbSettings::UpscalerTaa
+                                    ? int(100.0f / BbSettings::PresetScale(settings.preset))
+                                    : settings.render_scale.load())
+                             : DynamicResolution::Seed(scene_targets.Size().width, target_width,
+                                                       floor_percent, base_percent);
+        const int initial = std::clamp(seed, std::min(floor_percent, base_percent), base_percent);
+        dynamic_percent = initial < base_percent ? initial : 0;
+        drs_changed = now;
+        drs_lowered_from = drs_useful_floor = drs_blocked = 0;
+        drs_over_budget_windows = 0;
+        drs_window = now;
+        drs_busy_ns = 0;
+        drs_frames = 0;
+        std::printf("Dynamic resolution: starts at %d%% (current render size)\n", initial);
+    }
+    drs_was_enabled = enabled;
+    if (!enabled) {
+        dynamic_percent = 0;
+    }
+    // Menu/loading timings say nothing about the next scene's render cost.
+    // Discard that window rather than climbing to native and dropping on return.
+    if (enabled && !camera_motion.LastFrameHadCamera()) {
+        drs_window = now;
+        drs_busy_ns = 0;
+        drs_frames = 0;
+        drs_over_budget_windows = 0;
+        settings.dynamic_percent = dynamic_percent ? dynamic_percent : base_percent;
+        return dynamic_percent;
+    }
+    if (drs_window == steady_clock::time_point{}) drs_window = now;
+    const double window_ms = duration<double, std::milli>(now - drs_window).count();
+    if (window_ms < 500.0 || drs_frames < 8) {
+        settings.dynamic_percent = enabled ? (dynamic_percent ? dynamic_percent : base_percent) : 0;
+        return dynamic_percent;
+    }
+    // Per rendered frame over the window: G, the GPU's busy time; F, the frame interval.
+    const double gpu_ms = drs_busy_ns / 1e6 / drs_frames;
+    const double frame_ms = window_ms / drs_frames;
+    settings.gpu_frame_ms = float(gpu_ms);
+    drs_window = now;
+    drs_busy_ns = 0;
+    drs_frames = 0;
+    if (!enabled) {
+        settings.dynamic_percent = 0;
+        return 0;
+    }
+    // No completed GPU queries is not unlimited headroom. In particular, do
+    // not convert an infinite fitted scale to int on startup/unsupported timers.
+    if (!(gpu_ms > 0.0) || !std::isfinite(gpu_ms) || !std::isfinite(frame_ms)) {
+        drs_over_budget_windows = 0;
+        return dynamic_percent;
+    }
+    const u32 limit = EmulatorSettings.GetFrameLimit();
+    const double target_ms = 1000.0 / double(limit ? limit : EmulatorSettings.GetVblankFrequency());
+    const int current = dynamic_percent ? dynamic_percent : base_percent;
+    const double since_change = duration<double>(now - drs_changed).count();
+    // Where lowering stopped paying off (below), not lowered further for 30 s.
+    if (drs_useful_floor && duration<double>(now - drs_useful_floor_at).count() >= 30.0) {
+        drs_useful_floor = 0;
+    }
+    const int floor = std::min(std::max(floor_percent, drs_useful_floor), base_percent);
+    int next = current;
+    if (drs_lowered_from) {
+        // The first measurement after a step down: if the GPU saved under a tenth of what the
+        // pixel count predicts, its remaining work is not resolution-bound (the upscaler and
+        // HUD at output size, shadows) and the step only cost image quality. Go back up and
+        // stop there (4K DLSS at a 120 FPS limit: 10% -> 5% saved 0.1 of 12.7 ms).
+        const double predicted = drs_lowered_gpu_ms *
+            (1.0 - double(current * current) / double(drs_lowered_from * drs_lowered_from));
+        const double saved = drs_lowered_gpu_ms - gpu_ms;
+        const int from = drs_lowered_from;
+        drs_lowered_from = 0;
+        if (predicted > 1.0 && saved < 0.1 * predicted) {
+            std::printf("Dynamic resolution: %d%% -> %d%% saved %.1f of %.1f ms; back to %d%%\n",
+                        from, current, saved, drs_lowered_gpu_ms, from);
+            drs_useful_floor = from;
+            drs_useful_floor_at = now;
+            next = from;
+        }
+    }
+    // GPU-bound: busy for most of the frame, and either missing the target or within 5% of
+    // it (no headroom for heavier scenes). When the CPU limits the frame rate, the GPU is idle
+    // part of each frame and nothing is lowered.
+    const bool gpu_bound = gpu_ms > frame_ms * 0.9;
+    const bool over_budget = gpu_bound &&
+                            (frame_ms > target_ms * 1.05 || gpu_ms > target_ms * 0.95);
+    drs_over_budget_windows = over_budget ? std::min(drs_over_budget_windows + 1, 2u) : 0;
+    if (next != current) {
+        // reverting a step that did not pay off
+    } else if (over_budget && (drs_over_budget_windows >= 2 || gpu_ms > target_ms * 1.5) &&
+               since_change >= 0.5 && current > floor) {
+        // GPU time grows with pixel count plus fixed costs. Fit an 85% budget
+        // target, then slew-limit the actual transition below (never jump to it).
+        const double fit = current * std::sqrt(0.85 * target_ms / gpu_ms);
+        next = std::clamp(int(fit), floor, std::max(floor, current - 1));
+        // A step up undone within 3 s is not retried for 15 s (no oscillation).
+        if (drs_raised && since_change < 3.0) {
+            drs_blocked = current;
+            drs_blocked_at = now;
+        }
+    } else if (current < base_percent && since_change >= 2.0 &&
+               gpu_ms < 0.8 * std::max(target_ms, frame_ms)) {
+        // Headroom against whatever limits the frame (the target, or the CPU).
+        // Recovery is slower than lowering and obeys the same one-point limit.
+        const double budget = 0.85 * std::max(target_ms, frame_ms);
+        int up = std::clamp(int(current * std::sqrt(budget / gpu_ms)), current + 1,
+                            std::min(base_percent, current + 5));
+        if (drs_blocked && duration<double>(now - drs_blocked_at).count() < 15.0) {
+            up = std::min(up, drs_blocked - 1);
+        }
+        if (up > current) next = up;
+    }
+    next = DynamicResolution::Step(current, next, floor, base_percent);
+    if (next < current) {
+        drs_lowered_from = current;
+        drs_lowered_gpu_ms = gpu_ms;
+    }
+    if (++drs_reports % 10 == 0 && next == current) {
+        std::printf("Dynamic resolution: %d%% (GPU %.1f ms, frame %.1f ms, target %.1f ms)\n",
+                    current, gpu_ms, frame_ms, target_ms);
+    }
+    if (next != current) {
+        drs_raised = next > current;
+        std::printf("Dynamic resolution: %d%% -> %d%% (GPU %.1f ms, frame %.1f ms, target "
+                    "%.1f ms)\n",
+                    current, next, gpu_ms, frame_ms, target_ms);
+        drs_changed = now;
+    }
+    dynamic_percent = next >= base_percent ? 0 : next;
+    settings.dynamic_percent = next;
+    return dynamic_percent;
 }
 
 void TemporalUpscaler::OnDispatch(u64 cs_hash) {
@@ -372,21 +546,27 @@ void TemporalUpscaler::OnDispatch(u64 cs_hash) {
 bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     const bool use_fsr4 = UseFsr4();
     const bool use_taa = BbSettings::Get().upscaler == BbSettings::UpscalerTaa;
-    if (use_taa && (w != ow || h != oh)) {
-        std::printf("TAA: remove BB_RENDER_RES to use native-resolution TAA\n");
-        return false;
-    }
     if (resources_ready && w == width && h == height && ow == out_width && oh == out_height &&
         hdr == context_hdr && use_fsr4 == resources_fsr4 && use_taa == resources_taa) {
         return true;
     }
     const auto device = instance.GetDevice();
-    // FSR 4 owns no portable FSR 3 context, but its images can still be in flight.
-    scheduler.Finish();
-    resources_ready = false;
-    if (context) {
-        ffxVkPortableUpscaleContextDestroy(context);
-        context = nullptr;
+    // The FSR 3 context takes render sizes up to its maximum (the preset's or dynamic
+    // resolution's largest): a dynamic resolution step keeps it, and replaces only the images
+    // below, freed once the GPU is done with them (no stall). Anything else rebuilds it.
+    const u32 max_w = std::max(w, max_render_width), max_h = std::max(h, max_render_height);
+    const bool rebuild = !resources_ready || ow != out_width || oh != out_height ||
+                         hdr != context_hdr || use_fsr4 != resources_fsr4 ||
+                         use_taa != resources_taa ||
+                         (context && (w > context_width || h > context_height));
+    if (rebuild) {
+        // FSR 4 owns no portable FSR 3 context, but its images can still be in flight.
+        scheduler.Finish();
+        resources_ready = false;
+        if (context) {
+            ffxVkPortableUpscaleContextDestroy(context);
+            context = nullptr;
+        }
     }
     width = w;
     height = h;
@@ -413,10 +593,12 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     create_info.flags = hdr ? FFX_VK_PORTABLE_CONTEXT_HDR_COLOR_INPUT |
                                   FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE
                             : 0;
-    create_info.maxRenderSize = {w, h};
+    create_info.maxRenderSize = {max_w, max_h};
     create_info.maxOutputSize = {ow, oh};
     // FSR 4 has its own model context (vk_fsr4); the images below are shared.
-    if (!use_fsr4 && !use_taa) {
+    if (rebuild && !use_fsr4 && !use_taa) {
+        context_width = max_w;
+        context_height = max_h;
         if (const u64 issues = ffxVkPortableValidateUpscaleCreateInfo(&create_info)) {
             PrintIssues("create info", issues);
             return false;
@@ -430,45 +612,49 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     }
 
     const auto allocator = instance.GetAllocator();
-    motion_view.reset();
-    output_view.reset();
-    motion_image = VideoCore::UniqueImage(device, allocator);
-    motion_image.Create(vk::ImageCreateInfo{
-        .imageType = vk::ImageType::e2D,
-        .format = vk::Format::eR16G16Sfloat,
-        .extent = {w, h, 1},
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = vk::SampleCountFlagBits::e1,
-        .tiling = vk::ImageTiling::eOptimal,
-        .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
-        .initialLayout = vk::ImageLayout::eUndefined,
-    });
-    output_image = VideoCore::UniqueImage(device, allocator);
-    output_image.Create(vk::ImageCreateInfo{
-        .imageType = vk::ImageType::e2D,
-        .format = vk::Format::eR16G16B16A16Sfloat,
-        .extent = {ow, oh, 1},
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = vk::SampleCountFlagBits::e1,
-        .tiling = vk::ImageTiling::eOptimal,
-        .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
-                 vk::ImageUsageFlagBits::eTransferSrc,
-        .initialLayout = vk::ImageLayout::eUndefined,
-    });
-    output_view = Check(device.createImageViewUnique({
-        .image = vk::Image(output_image),
-        .viewType = vk::ImageViewType::e2D,
-        .format = vk::Format::eR16G16B16A16Sfloat,
-        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
-    }));
-    motion_view = Check(device.createImageViewUnique({
-        .image = vk::Image(motion_image),
-        .viewType = vk::ImageViewType::e2D,
-        .format = vk::Format::eR16G16Sfloat,
-        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
-    }));
+    // Park the previous size's motion and output images, then reuse or create this size's.
+    for (auto* pooled : {&motion_image, &output_image}) {
+        if (*pooled) {
+            auto& view = pooled == &motion_image ? motion_view : output_view;
+            image_pool.push_back({std::move(*pooled), std::move(view)});
+        }
+    }
+    const auto pooled_image = [&](VideoCore::UniqueImage& image, vk::UniqueImageView& view,
+                                  vk::Format format, u32 iw, u32 ih, vk::ImageUsageFlags usage) {
+        const auto it = std::ranges::find_if(image_pool, [&](const PooledImage& p) {
+            return p.image.image_ci.format == format && p.image.image_ci.extent.width == iw &&
+                   p.image.image_ci.extent.height == ih && p.image.image_ci.usage == usage;
+        });
+        if (it != image_pool.end()) {
+            image = std::move(it->image);
+            view = std::move(it->view);
+            image_pool.erase(it);
+            return;
+        }
+        image = VideoCore::UniqueImage(device, allocator);
+        image.Create(vk::ImageCreateInfo{
+            .imageType = vk::ImageType::e2D,
+            .format = format,
+            .extent = {iw, ih, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk::SampleCountFlagBits::e1,
+            .tiling = vk::ImageTiling::eOptimal,
+            .usage = usage,
+            .initialLayout = vk::ImageLayout::eUndefined,
+        });
+        view = Check(device.createImageViewUnique({
+            .image = vk::Image(image),
+            .viewType = vk::ImageViewType::e2D,
+            .format = format,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        }));
+    };
+    pooled_image(motion_image, motion_view, vk::Format::eR16G16Sfloat, w, h,
+                 vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled);
+    pooled_image(output_image, output_view, vk::Format::eR16G16B16A16Sfloat, ow, oh,
+                 vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+                     vk::ImageUsageFlagBits::eTransferSrc);
     const auto make_image = [&](VideoCore::UniqueImage& image, vk::UniqueImageView& view,
                                 vk::Format format, vk::ImageUsageFlags usage, u32 iw = 0,
                                 u32 ih = 0, vk::ImageAspectFlags aspect =
@@ -495,25 +681,49 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
             .subresourceRange = {aspect, 0, 1, 0, 1},
         }));
     };
+    struct Retired {
+        std::vector<VideoCore::UniqueImage> images;
+        std::vector<vk::UniqueImageView> views; // destroyed first
+    } retired;
+    const auto retire = [&](VideoCore::UniqueImage& image, vk::UniqueImageView& view) {
+        if (view) retired.views.push_back(std::move(view));
+        if (image) retired.images.push_back(std::move(image));
+    };
+    retire(opaque_image, opaque_view);
+    retire(reactive_image, reactive_view);
+    for (u32 i = 0; i < taa_history.size(); ++i) retire(taa_history[i], taa_history_views[i]);
+    retire(taa_scaled_image, taa_scaled_view);
+    if (!retired.images.empty()) {
+        scheduler.DeferOperation([old = std::move(retired)]() mutable {});
+    }
     make_image(opaque_image, opaque_view, vk::Format::eR16G16B16A16Sfloat,
                vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst |
                    vk::ImageUsageFlagBits::eTransferSrc);
     make_image(reactive_image, reactive_view, vk::Format::eR8Unorm,
                vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled);
+    // TAA runs at the render size (render_scale); a different output size is reached by a
+    // linear resample of its result (taa_scaled_image).
     for (u32 i = 0; i < taa_history.size(); ++i) {
         taa_history_views[i].reset();
         taa_history[i] = VideoCore::UniqueImage{};
         if (use_taa) {
             make_image(taa_history[i], taa_history_views[i], vk::Format::eR32G32B32A32Sfloat,
                        vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
-                           vk::ImageUsageFlagBits::eTransferSrc,
-                       ow, oh);
+                           vk::ImageUsageFlagBits::eTransferSrc);
         }
+    }
+    taa_scaled_view.reset();
+    taa_scaled_image = VideoCore::UniqueImage{};
+    if (use_taa && (w != ow || h != oh)) {
+        make_image(taa_scaled_image, taa_scaled_view, vk::Format::eR16G16B16A16Sfloat,
+                   vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc);
     }
     taa_next = 0;
     CreatePipelines();
     opaque_valid = false;
-    reset = true;
+    // DLSS and FSR keep their history (at the output size) across a render size change; TAA's
+    // is at the render size.
+    if (rebuild || use_taa) reset = true;
     resources_ready = true;
     resources_fsr4 = use_fsr4;
     resources_taa = use_taa;
@@ -660,9 +870,24 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
     }
     cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = u32(barriers.size()),
                              .pImageMemoryBarriers = barriers.data()});
+    const bool scaled = bool(taa_scaled_image);
+    const vk::ImageView result = scaled ? *taa_scaled_view : *output_view;
+    if (scaled) {
+        const vk::ImageMemoryBarrier2 to_write{
+            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcAccessMask = vk::AccessFlagBits2::eMemoryRead,
+            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+                             vk::AccessFlagBits2::eShaderStorageWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .image = vk::Image(taa_scaled_image),
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_write});
+    }
     const std::array<vk::ImageView, 7> views{
         color, depth, *motion_view, *taa_history_views[1 - taa_next],
-        *output_view, *taa_history_views[taa_next], *opaque_view};
+        result, *taa_history_views[taa_next], *opaque_view};
     std::array<vk::DescriptorImageInfo, 7> infos{};
     std::array<vk::WriteDescriptorSet, 7> writes{};
     for (u32 i = 0; i < infos.size(); ++i) {
@@ -699,7 +924,7 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
     cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *taa_pipeline_layout, 0, writes);
     cmdbuf.pushConstants(*taa_pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0,
                          sizeof(params), &params);
-    cmdbuf.dispatch((out_width + 7) / 8, (out_height + 7) / 8, 1);
+    cmdbuf.dispatch((width + 7) / 8, (height + 7) / 8, 1);
     const auto& settings = BbSettings::Get();
     const float strength = std::clamp(settings.sharpness.load(), 0.0f, 2.0f);
     if (settings.sharpen && strength > 0.0f && !(params.pad & 0xffu)) {
@@ -712,7 +937,7 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
         cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &resolved});
         const std::array<vk::DescriptorImageInfo, 2> sharpen_infos{{
             {.imageView = *taa_history_views[taa_next], .imageLayout = vk::ImageLayout::eGeneral},
-            {.imageView = *output_view, .imageLayout = vk::ImageLayout::eGeneral}}};
+            {.imageView = result, .imageLayout = vk::ImageLayout::eGeneral}}};
         std::array<vk::WriteDescriptorSet, 2> sharpen_writes{};
         for (u32 i = 0; i < sharpen_writes.size(); ++i)
             sharpen_writes[i] = {.dstBinding = i, .descriptorCount = 1,
@@ -722,9 +947,53 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
                                     *taa_sharpen_pipeline_layout, 0, sharpen_writes);
         cmdbuf.pushConstants(*taa_sharpen_pipeline_layout, vk::ShaderStageFlagBits::eCompute,
                              0, sizeof(strength), &strength);
-        cmdbuf.dispatch((out_width + 7) / 8, (out_height + 7) / 8, 1);
+        cmdbuf.dispatch((width + 7) / 8, (height + 7) / 8, 1);
     }
     taa_next = 1 - taa_next;
+    if (!scaled) {
+        return;
+    }
+    // Render size -> output size (the caller has the output image in General for writes).
+    const std::array<vk::ImageMemoryBarrier2, 2> to_blit{{
+        {.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+         .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+         .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+         .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+         .oldLayout = vk::ImageLayout::eGeneral,
+         .newLayout = vk::ImageLayout::eGeneral,
+         .image = vk::Image(taa_scaled_image),
+         .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}},
+        {.srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+         .srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+         .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+         .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+         .oldLayout = vk::ImageLayout::eGeneral,
+         .newLayout = vk::ImageLayout::eGeneral,
+         .image = vk::Image(output_image),
+         .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}},
+    }};
+    cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = u32(to_blit.size()),
+                             .pImageMemoryBarriers = to_blit.data()});
+    const vk::ImageBlit region{
+        .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(width), s32(height), 1}},
+        .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .dstOffsets = std::array{vk::Offset3D{0, 0, 0},
+                                 vk::Offset3D{s32(out_width), s32(out_height), 1}},
+    };
+    cmdbuf.blitImage(vk::Image(taa_scaled_image), vk::ImageLayout::eGeneral,
+                     vk::Image(output_image), vk::ImageLayout::eGeneral, region,
+                     vk::Filter::eLinear);
+    const vk::ImageMemoryBarrier2 written{
+        .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+        .oldLayout = vk::ImageLayout::eGeneral,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = vk::Image(output_image),
+        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+    cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &written});
 }
 
 void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, bool ldr, u32 w,
@@ -1014,6 +1283,9 @@ void TemporalUpscaler::Run() {
         !(color.usage_flags & vk::ImageUsageFlagBits::eStorage)) {
         return;
     }
+    if (BbSettings::Get().upscaler != BbSettings::UpscalerTaa && (w > ow || h > oh)) {
+        return; // a supersampled TAA scene the frame the upscaler changed
+    }
     if (!EnsureResources(w, h, ow, oh, true)) {
         failed = true;
         return;
@@ -1035,9 +1307,11 @@ void TemporalUpscaler::Run() {
     if (reduced) {
         VideoCore::ImageViewInfo ci;
         ci.format = color.info.pixel_format;
-        const auto c = scene_targets.Read(scene_color, ci);
+        constexpr auto stages = vk::PipelineStageFlagBits2::eComputeShader;
+        constexpr auto access = vk::AccessFlagBits2::eShaderRead;
+        const auto c = scene_targets.Read(scene_color, ci, stages, access, UsesNgx());
         ci.format = depth.info.pixel_format;
-        const auto d = scene_targets.Read(camera_motion.Depth(), ci);
+        const auto d = scene_targets.Read(camera_motion.Depth(), ci, stages, access, UsesNgx());
         input_color = c.image;
         input_depth = d.image;
         input_color_view = c.view;
@@ -1285,7 +1559,10 @@ float TemporalUpscaler::SceneMipBias() const {
 }
 
 bool TemporalUpscaler::Scaled() const {
-    return scaled_session || target_width != 1920 || target_height != 1080;
+    // Upscaler off with render_scale away from 100: the scene is linearly scaled to the
+    // output under native-resolution UI, as for other output sizes.
+    return scaled_session || target_width != 1920 || target_height != 1080 ||
+           (!Active() && scene_targets.Reduced());
 }
 
 void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
@@ -1540,8 +1817,10 @@ void TemporalUpscaler::RunScaled() {
     const u32 iw = color.info.size.width, ih = color.info.size.height;
     const auto [w, h] = SceneSize(iw, ih);
     const u32 ow = target_width, oh = target_height;
-    if (depth.info.size.width != iw || depth.info.size.height != ih || w > ow || h > oh) {
-        return;
+    const bool taa = BbSettings::Get().upscaler == BbSettings::UpscalerTaa;
+    if (depth.info.size.width != iw || depth.info.size.height != ih ||
+        (!taa && (w > ow || h > oh))) {
+        return; // only TAA supersamples (render_scale above 100)
     }
     if (!EnsureResources(w, h, ow, oh, false)) {
         failed = true;
@@ -1558,8 +1837,10 @@ void TemporalUpscaler::RunScaled() {
         VideoCore::ImageViewInfo ci, di;
         ci.format = color.info.pixel_format;
         di.format = depth_format;
-        const auto cp = scene_targets.Read(ldr_target, ci);
-        const auto dp = scene_targets.Read(camera_motion.Depth(), di);
+        constexpr auto stages = vk::PipelineStageFlagBits2::eComputeShader;
+        constexpr auto access = vk::AccessFlagBits2::eShaderRead;
+        const auto cp = scene_targets.Read(ldr_target, ci, stages, access, UsesNgx());
+        const auto dp = scene_targets.Read(camera_motion.Depth(), di, stages, access, UsesNgx());
         color_image = cp.image;
         color_view = cp.view;
         depth_image = dp.image;
@@ -1978,6 +2259,8 @@ bool TemporalUpscaler::RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image 
                    vk::Format::eR16G16B16A16Sfloat},
         .render_width = w,
         .render_height = h,
+        .max_render_width = std::max(w, max_render_width),
+        .max_render_height = std::max(h, max_render_height),
         .preset = applied_preset,
         .jitter = {sign * jitter[0], sign * jitter[1]},
         .frame_ms = frame_ms,
@@ -1990,6 +2273,12 @@ bool TemporalUpscaler::RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image 
         .auto_exposure = settings.fsr4_auto_exposure,
     };
     const bool ok = use_dlss ? dlss->Record(frame) : fsr4->Record(frame);
+    if (use_dlss && !ok && dynamic_percent >= dlss_floor_percent) {
+        // DLSS refused this small a render size: dynamic resolution stays above it.
+        dlss_floor_percent = dynamic_percent + 1;
+        std::printf("Dynamic resolution: DLSS takes no %d%%; at least %d%% from now on\n",
+                    dynamic_percent, dlss_floor_percent);
+    }
     // The menu shows the reason; it outlives this frame (FSR 4 keeps its last message).
     static std::string shown;
     const char* problem = use_dlss ? dlss->Problem() : fsr4->Problem();
