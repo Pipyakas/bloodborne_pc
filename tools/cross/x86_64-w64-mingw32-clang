@@ -1,0 +1,4 @@
+#!/bin/sh
+# Host clang targeting MSYS2 CLANG64 (Windows, UCRT, libc++); see tools/cross/build-windows.sh.
+exec clang --target=x86_64-w64-windows-gnu --sysroot=/opt/msys/clang64 -fuse-ld=lld \
+    -rtlib=compiler-rt -unwindlib=libunwind -isystem /opt/msys/clang64/include "$@"

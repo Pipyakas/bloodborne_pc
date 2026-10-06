@@ -1,0 +1,25 @@
+# Cross-compiler for the Windows build (tools/cross/build-windows.sh): host clang/lld from Arch,
+# target headers and libraries from MSYS2's CLANG64 repository (the same packages a native
+# Windows build uses), installed into /opt/msys with pacman.
+FROM docker.io/library/archlinux:latest
+RUN pacman -Syu --noconfirm --needed clang lld llvm cmake ninja pkgconf python git glslang mono zstd \
+    && pacman -Scc --noconfirm
+COPY msys2-pacman.conf /etc/msys2-pacman.conf
+# Package scriptlets need a Windows shell and fail here; they only touch files a build doesn't use.
+RUN mkdir -p /opt/msys/var/lib/pacman /opt/msys/var/cache/pacman \
+    && (pacman --config /etc/msys2-pacman.conf -r /opt/msys --cachedir /opt/msys/var/cache/pacman -Sy --noconfirm \
+       mingw-w64-clang-x86_64-crt mingw-w64-clang-x86_64-headers mingw-w64-clang-x86_64-libc++ \
+       mingw-w64-clang-x86_64-libunwind mingw-w64-clang-x86_64-compiler-rt mingw-w64-clang-x86_64-clang \
+       mingw-w64-clang-x86_64-sdl3 mingw-w64-clang-x86_64-boost mingw-w64-clang-x86_64-fmt \
+       mingw-w64-clang-x86_64-spirv-headers mingw-w64-clang-x86_64-vulkan-headers \
+       mingw-w64-clang-x86_64-vulkan-loader mingw-w64-clang-x86_64-vulkan-memory-allocator \
+       mingw-w64-clang-x86_64-xxhash mingw-w64-clang-x86_64-zydis mingw-w64-clang-x86_64-robin-map \
+       mingw-w64-clang-x86_64-ffmpeg || true) \
+    && test -f /opt/msys/clang64/lib/libSDL3.dll.a && test -f /opt/msys/clang64/lib/libavcodec.dll.a \
+    && rm -rf /opt/msys/var/cache/pacman/*
+# The host clang's resource directory gets MSYS2's Windows compiler-rt (builtins, profile).
+RUN v=$(clang -dumpversion | cut -d. -f1) && w=$(ls -d /opt/msys/clang64/lib/clang/*/lib/windows) \
+    && mkdir -p /usr/lib/clang/$v/lib && ln -s "$w" /usr/lib/clang/$v/lib/windows \
+    && ln -sf /usr/bin/llvm-ar /usr/local/bin/ar
+COPY x86_64-w64-mingw32-clang x86_64-w64-mingw32-clang++ /usr/local/bin/
+COPY toolchain.cmake /opt/cross/toolchain.cmake

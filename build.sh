@@ -28,6 +28,8 @@ read -r -a libraries <<< "$(pkg-config --libs vulkan sdl3)"
 # stay below 1 TiB).
 windows=
 case $(uname -s) in MINGW*|MSYS*|CYGWIN*) windows=1 ;; esac
+# Cross build from Linux (tools/cross/build-windows.sh): BB_TARGET=windows with its toolchain.
+[[ ${BB_TARGET:-} == windows ]] && windows=1
 cstd=(-std=c11)
 threads=(-pthread)
 if [[ -n $windows ]]; then
@@ -96,10 +98,16 @@ fi
 # with the C# compiler of .NET Framework 4 that Windows includes.
 if [[ -n $windows && ( ! -f out/bbport-pkg.exe ||
       -n $(find tools/setup/PkgInstall.cs tools/setup/PkgTool.cs -newer out/bbport-pkg.exe -print -quit) ) ]]; then
-    csc="$(cygpath -u "${WINDIR:-C:/Windows}")/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
-    if [[ -x $csc ]]; then
-        "$csc" -nologo -target:exe -optimize+ "-out:$(cygpath -w out/bbport-pkg.exe)" -r:System.Numerics.dll \
-            "$(cygpath -w tools/setup/PkgInstall.cs)" "$(cygpath -w tools/setup/PkgTool.cs)"
+    if command -v cygpath >/dev/null; then
+        csc="$(cygpath -u "${WINDIR:-C:/Windows}")/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+        winpath() { cygpath -w "$1"; }
+    else
+        csc=$(command -v csc || true) # cross build: Mono's compiler, same .NET Framework 4 target
+        winpath() { printf '%s' "$1"; }
+    fi
+    if [[ -n $csc && -x $csc ]]; then
+        "$csc" -nologo -target:exe -optimize+ "-out:$(winpath out/bbport-pkg.exe)" -r:System.Numerics.dll \
+            "$(winpath tools/setup/PkgInstall.cs)" "$(winpath tools/setup/PkgTool.cs)"
         echo "Built $PWD/out/bbport-pkg.exe"
     else
         echo "No .NET Framework C# compiler: out/bbport-pkg.exe (installing from .pkg files) not built" >&2
