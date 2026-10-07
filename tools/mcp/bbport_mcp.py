@@ -91,8 +91,11 @@ class Game:
             environment['BB_GAME_DIR'] = game_dir
         environment.update({k: str(v) for k, v in (env or {}).items()})
         if WINDOWS:
-            msys = Path(environment.get('BB_MSYS2', r'C:\msys64'))
-            command = [str(msys / 'clang64/bin/python.exe'), str(ROOT / 'scripts/run_windows.py')]
+            # Installs built on Linux (tools/cross) bring their own Python, as run.bat prefers.
+            python = ROOT / 'python/python.exe'
+            if not python.is_file():
+                python = Path(environment.get('BB_MSYS2', r'C:\msys64')) / 'clang64/bin/python.exe'
+            command = [str(python), str(ROOT / 'scripts/run_windows.py')]
         else:
             command = ['bash', str(ROOT / 'run.sh')]
         command += [str(a) for a in args]  # the launchers pass them on to bb-probe
