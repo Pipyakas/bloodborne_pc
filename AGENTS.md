@@ -35,12 +35,13 @@
 ## Definition of done: update the playable master build
 
 The user tests the port on the Windows laptop through the **Bloodborne (bbport)**
-Start menu shortcut. It launches `C:\Games\bbport\Bloodborne.cmd`, which first pulls
+Start menu shortcut. It launches `D:\bbport\Bloodborne.cmd`, which first pulls
 d1's latest Windows build (`tools/cross/bbport-update.ps1`) and then starts it. d1 makes
 that build from `master` automatically: the `bbport-wincross.timer` user timer runs
 `tools/cross/build-windows.sh --if-changed master` every 2 minutes and stages
-`dist/windows` (log: `.cross/build.log`). Never build on the laptop; `C:\code\bloodborne_pc`
-there is an old checkout, not the playable build.
+`dist/windows` (log: `.cross/build.log`). Never build on the laptop unless the user asks; if a build there is ever needed, its output
+goes to `D:\bbport` too (the laptop's only bbport build/install folder), never to another
+folder. `C:\code\bloodborne_pc` there is an old checkout, not the playable build.
 
 For completed implementation work, the user authorizes agents to commit their own
 changes, integrate them into `master`, rebuild the playable checkout, and push
@@ -52,7 +53,7 @@ merge, or do not push) override this default.
 
 During development, the user authorizes agents to close the running playable build
 before updating it, without asking again. Match the executable path
-`C:\Games\bbport\out\bb-probe.exe` exactly: request a graceful close first, then
+`D:\bbport\out\bb-probe.exe` exactly: request a graceful close first, then
 terminate that confirmed instance if it does not exit. Do not stop unrelated games or
 applications under this permission. (The updater itself skips updating while it runs.)
 
@@ -74,11 +75,11 @@ Before reporting implementation work as finished:
    Windows build failed, `.cross/build.log` says why and `dist/windows` keeps the
    previous build.
 5. For runtime changes, smoke-test on the laptop: run `bbport-update.ps1` in
-   `C:\Games\bbport` (or start through the shortcut only with the user's permission),
+   `D:\bbport` (or start through the shortcut only with the user's permission),
    then `python\python.exe tools\mcp\bbport_mcp.py launch` there; stop your test
    instance afterward. Minimized, silent launches are the default; do not launch a
    foreground game, enable sound, or manipulate desktop focus without the user's
-   permission. Preserve the user's settings and saves (they live in `C:\Games\bbport`
+   permission. Preserve the user's settings and saves (they live in `D:\bbport`
    and updates never delete them).
 6. Publish tested, integrated work with a normal, non-force push to
    `origin/master`. Fetch/check the current remote first; if it advanced,
