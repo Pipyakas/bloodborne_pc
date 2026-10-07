@@ -30,6 +30,9 @@ void bbgpu_dump_guest_writes(void *ucontext);
 /* Keyboard text entry through the game window (IME dialog). begin returns 0 when
  * no window exists; poll returns 0 typing, 1 confirmed, 2 cancelled (UTF-8 text). */
 int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
+/* Local control-channel tests: enqueue a real SDL UI event (does not press the guest pad).
+ * Buttons use 0/1; lx/ly/rx/ry/lt/rt use SDL's signed 16-bit axis range. */
+int bbgpu_ui_gamepad_event(const char *control, int value);
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 /* Control channel (src/runtime_control.c): completes an open text entry as if typed and
  * confirmed (0 when none is open); 1 while one is open. */

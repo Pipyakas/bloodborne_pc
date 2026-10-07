@@ -373,6 +373,38 @@ extern "C" int bbgpu_text_input_submit(const char* text) {
     return BbOverlay::SubmitText(text ? text : "") ? 1 : 0;
 }
 
+extern "C" int bbgpu_ui_gamepad_event(const char* control, int value) {
+    if (!g_window || !control) return 0;
+    static const struct { const char* name; SDL_GamepadButton code; } buttons[] = {
+        {"cross", SDL_GAMEPAD_BUTTON_SOUTH}, {"circle", SDL_GAMEPAD_BUTTON_EAST},
+        {"square", SDL_GAMEPAD_BUTTON_WEST}, {"triangle", SDL_GAMEPAD_BUTTON_NORTH},
+        {"up", SDL_GAMEPAD_BUTTON_DPAD_UP}, {"down", SDL_GAMEPAD_BUTTON_DPAD_DOWN},
+        {"left", SDL_GAMEPAD_BUTTON_DPAD_LEFT}, {"right", SDL_GAMEPAD_BUTTON_DPAD_RIGHT},
+        {"l1", SDL_GAMEPAD_BUTTON_LEFT_SHOULDER}, {"r1", SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER},
+        {"l3", SDL_GAMEPAD_BUTTON_LEFT_STICK}, {"r3", SDL_GAMEPAD_BUTTON_RIGHT_STICK},
+        {"options", SDL_GAMEPAD_BUTTON_START}, {"back", SDL_GAMEPAD_BUTTON_BACK},
+    };
+    SDL_Event event{};
+    for (const auto& button : buttons) {
+        if (std::strcmp(control, button.name)) continue;
+        if (value != 0 && value != 1) return 0;
+        event.type = value ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
+        event.gbutton.button = button.code;
+        event.gbutton.down = value != 0;
+        return SDL_PushEvent(&event) ? 1 : 0;
+    }
+    static const char* axes[] = {"lx", "ly", "rx", "ry", "lt", "rt"};
+    for (int axis = 0; axis < SDL_GAMEPAD_AXIS_COUNT; ++axis) {
+        if (std::strcmp(control, axes[axis])) continue;
+        if (value < -32768 || value > 32767) return 0;
+        event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+        event.gaxis.axis = axis;
+        event.gaxis.value = Sint16(value);
+        return SDL_PushEvent(&event) ? 1 : 0;
+    }
+    return 0;
+}
+
 extern "C" int bbgpu_text_input_active(void) {
     return BbOverlay::TextInputActive() ? 1 : 0;
 }

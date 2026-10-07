@@ -104,6 +104,13 @@ static void command(Socket client, char *line) {
     } else if (!strcmp(name, "text")) {
         if (bbgpu_text_input_submit(rest)) reply(client, "ok");
         else reply(client, "error no text entry is open");
+    } else if (!strcmp(name, "ui")) {
+        // Test the actual SDL controller event path without desktop focus or guest-pad input.
+        char control[32], extra;
+        int value;
+        if (sscanf(rest,"%31s %d %c",control,&value,&extra) != 2 ||
+            !bbgpu_ui_gamepad_event(control,value)) reply(client,"error ui <control> <value>");
+        else reply(client,"ok");
     } else if (!strcmp(name, "ime")) {
         // Opens the same centered input box the PS4 system IME shows, through the entry point
         // the guest uses (sceImeDialogInit), so it can be tested without playing to a prompt.

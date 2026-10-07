@@ -151,6 +151,14 @@ the unsafe patch. Open it with the left touchpad / G; Backspace is the right tou
 Touch coordinates are forwarded from SDL gamepads; Back/Select emulates a left click on
 pads without a touch surface. The port's settings menu is F1 / L3+R3.
 
+**Controller-friendly port UI:** larger text/buttons and a gold focus outline in the settings,
+name-entry and first-launch screens. Use the D-pad or left stick to navigate, Cross/A to
+select/edit, Circle/B to back out, and the right stick to scroll. In settings, L1/R1 adjusts
+values slowly/quickly; L3+R3 closes the menu. Name entry includes an on-screen keyboard with
+case, Space and Delete buttons; Options/Start confirms and Circle/B cancels. Physical keyboard
+and mouse input still work. First-launch file/folder selection opens the operating system's
+native picker, which may still require a mouse or keyboard.
+
 GPU occlusion queries still use synthetic pixel counters (`PixelPipeStatDump`), and
 `IT_SET_PREDICATION` is unimplemented. Free camera allows visual investigation; it does
 not implement GPU occlusion culling.

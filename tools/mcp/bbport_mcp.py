@@ -458,7 +458,9 @@ def game_text(text):
 
 @tool('game_commands', 'Run raw control-channel commands in order (fewer round trips for '
       'scripted routes): "press <frames> <tokens>", "pad [tokens]", "wait <frames>", '
-      '"sleep <seconds>", "status", "set <bbport.ini key> <value>" (live, not saved). '
+      '"sleep <seconds>", "status", "set <bbport.ini key> <value>" (live, not saved), '
+      '"ui <control> <value>" (SDL overlay input: cross/circle/up/down/left/right/l3/r3/options '
+      'use 0/1; lx/ly/rx/ry/lt/rt use -32768..32767; wait between press and release). '
       'Stops at the first error.',
       {'commands': {'type': 'array', 'items': {'type': 'string'}}}, ['commands'])
 def game_commands(commands):

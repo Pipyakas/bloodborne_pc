@@ -2,11 +2,33 @@
 // Headless regression test: uses the real dialog widget and ImGui input queue.
 #include "../gpu/shim/bbport_overlay.cpp"
 #include <cassert>
+#include "imgui_internal.h"
 
 static void frame() {
-    ImGui::NewFrame();
-    if (BbOverlay::TextInputActive()) BbOverlay::TextDialogWindow();
-    ImGui::Render();
+    BbOverlay::DrawUi();
+}
+
+static void button(Uint8 code, bool down) {
+    SDL_Event event{};
+    event.type = down ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
+    event.gbutton.button = code;
+    BbOverlay::HandleEvent(event);
+    frame();
+}
+
+static void press(Uint8 code) {
+    button(code, true);
+    button(code, false);
+    frame();
+}
+
+static void axis(Uint8 code, Sint16 value) {
+    SDL_Event event{};
+    event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+    event.gaxis.axis = code;
+    event.gaxis.value = value;
+    BbOverlay::HandleEvent(event);
+    frame();
 }
 
 int main() {
@@ -15,6 +37,8 @@ int main() {
     io.IniFilename = nullptr;
     io.DisplaySize = ImVec2(1024, 576);
     io.DeltaTime = 1.0f / 60.0f;
+    BbImGui::ControllerStyle();
+    io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
     unsigned char* pixels;
     int width, height;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
@@ -65,6 +89,95 @@ int main() {
     assert(BbOverlay::SubmitText(std::string(300, 'X')));
     assert(BbOverlay::PollTextInput(out) == 1 && out == std::string(255, 'X'));
 
+    // Real SDL button/axis events, not direct changes to ImGui's navigation state.
+    press(SDL_GAMEPAD_BUTTON_SOUTH); // remember controller input before opening the next request
+    assert(BbOverlay::BeginTextInput("", "Name"));
+    frame();
+    frame();
+    assert(BbOverlay::PollTextInput(out) == 0 && out.empty());
+    press(SDL_GAMEPAD_BUTTON_SOUTH);
+    assert(BbOverlay::PollTextInput(out) == 0 && out == "q");
+    press(SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+    press(SDL_GAMEPAD_BUTTON_SOUTH);
+    assert(BbOverlay::PollTextInput(out) == 0 && out == "qw");
+    axis(SDL_GAMEPAD_AXIS_LEFTX, 32767);
+    axis(SDL_GAMEPAD_AXIS_LEFTX, 0);
+    frame();
+    press(SDL_GAMEPAD_BUTTON_SOUTH);
+    assert(BbOverlay::PollTextInput(out) == 0);
+    assert(out == "qwe");
+    button(SDL_GAMEPAD_BUTTON_START, true);
+    assert(BbOverlay::PollTextInput(out) == 1 && out == "qwe");
+    assert(BbOverlay::CapturesInput()); // do not leak the held confirm to the game
+    button(SDL_GAMEPAD_BUTTON_START, false);
+    assert(!BbOverlay::CapturesInput());
+
+    assert(BbOverlay::BeginTextInput("\xD0\x90\xD0\xBD\xD0\xBD\xD0\xB0", "Name"));
+    frame();
+    frame();
+    for (int i = 0; i < 3; ++i) press(SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+    press(SDL_GAMEPAD_BUTTON_SOUTH);
+    assert(BbOverlay::text_dialog.uppercase);
+    press(SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+    press(SDL_GAMEPAD_BUTTON_SOUTH); // Space
+    assert(BbOverlay::PollTextInput(out) == 0 && out == "\xD0\x90\xD0\xBD\xD0\xBD\xD0\xB0 ");
+    press(SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+    press(SDL_GAMEPAD_BUTTON_SOUTH); // Delete space
+    press(SDL_GAMEPAD_BUTTON_SOUTH); // Delete a whole UTF-8 character
+    assert(BbOverlay::PollTextInput(out) == 0 && out == "\xD0\x90\xD0\xBD\xD0\xBD");
+    press(SDL_GAMEPAD_BUTTON_START);
+
+    assert(BbOverlay::BeginTextInput("Original", "Name"));
+    frame();
+    frame();
+    press(SDL_GAMEPAD_BUTTON_SOUTH);
+    button(SDL_GAMEPAD_BUTTON_EAST, true);
+    assert(BbOverlay::PollTextInput(out) == 2 && out == "Original");
+    button(SDL_GAMEPAD_BUTTON_EAST, false);
+    assert(!BbOverlay::CapturesInput());
+
+    BbSettings::Get().overlay_docked = false;
+    button(SDL_GAMEPAD_BUTTON_LEFT_STICK, true);
+    button(SDL_GAMEPAD_BUTTON_RIGHT_STICK, true);
+    assert(BbOverlay::menu_open);
+    press(SDL_GAMEPAD_BUTTON_DPAD_DOWN); // held chord must not toggle again on another button
+    assert(BbOverlay::menu_open);
+    button(SDL_GAMEPAD_BUTTON_LEFT_STICK, false);
+    button(SDL_GAMEPAD_BUTTON_RIGHT_STICK, false);
+    frame();
+    const ImGuiID before = GImGui->NavId;
+    assert(before != 0);
+    press(SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+    assert(GImGui->NavId != before);
+    axis(SDL_GAMEPAD_AXIS_LEFTY, 32767);
+    axis(SDL_GAMEPAD_AXIS_LEFTY, 0);
+    assert(io.KeysData[ImGuiKey_GamepadLStickDown - ImGuiKey_NamedKey_BEGIN].AnalogValue == 0.0f);
+    press(SDL_GAMEPAD_BUTTON_EAST);
+    assert(!BbOverlay::menu_open && !BbOverlay::CapturesInput());
+
+    BbOverlay::SetOpen(true);
+    frame();
+    frame();
+    press(SDL_GAMEPAD_BUTTON_SOUTH);
+    assert(GImGui->OpenPopupStack.Size > 0);
+    press(SDL_GAMEPAD_BUTTON_EAST);
+    assert(GImGui->OpenPopupStack.Size == 0 && BbOverlay::menu_open);
+    const float scroll_before = GImGui->NavWindow->Scroll.y;
+    axis(SDL_GAMEPAD_AXIS_RIGHTY, 32767);
+    for (int i = 0; i < 20; ++i) frame();
+    axis(SDL_GAMEPAD_AXIS_RIGHTY, 0);
+    assert(GImGui->NavWindow->Scroll.y > scroll_before);
+    press(SDL_GAMEPAD_BUTTON_EAST);
+    assert(!BbOverlay::menu_open);
+
+    // Disconnect clears held controls/release guards rather than trapping input forever.
+    assert(BbOverlay::BeginTextInput("", "Name"));
+    button(SDL_GAMEPAD_BUTTON_EAST, true);
+    SDL_Event removed{};
+    removed.type = SDL_EVENT_GAMEPAD_REMOVED;
+    BbOverlay::HandleEvent(removed);
+    assert(!BbOverlay::CapturesInput());
+
     ImGui::DestroyContext();
-    std::puts("PASS: text entry typing, confirm, cancel, reopen, UTF-8 and control submission");
+    std::puts("PASS: text entry, gamepad keyboard, stick/D-pad navigation, menu toggle/back and input isolation");
 }

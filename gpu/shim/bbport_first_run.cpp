@@ -24,6 +24,7 @@
 #include <miniz.h>
 #include "../bbgpu.h"
 #include "bbport_overlay.h"
+#include "bbport_imgui.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlrenderer3.h"
@@ -118,6 +119,8 @@ private:
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
     float scale = 1.0f;
+    int focused_page = -1;
+    bool page_focus = true;
 
     std::string Tool() const { return Join(exe_dir, "bbport-pkg.exe"); }
     bool Button(const char* label, float width = 0.0f);
@@ -135,6 +138,10 @@ private:
 };
 
 bool FirstRun::Button(const char* label, float width) {
+    if (page_focus) {
+        ImGui::SetKeyboardFocusHere();
+        page_focus = false;
+    }
     const bool pressed = ImGui::Button(label, ImVec2(width, 0.0f));
     if (!click.empty() && click == label) {
         click.clear();
@@ -377,16 +384,22 @@ void FirstRun::Draw() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const ImVec2 center(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
                         viewport->WorkPos.y + viewport->WorkSize.y * 0.5f);
-    const float width = std::min(640.0f * scale, viewport->WorkSize.x * 0.9f);
+    page_focus = focused_page != int(page);
+    focused_page = int(page);
+    const float width = std::min(960.0f * scale, viewport->WorkSize.x * 0.94f);
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(width, 0.0f), ImGuiCond_Always);
-    constexpr ImGuiWindowFlags Flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(width, viewport->WorkSize.y * 0.94f));
+    if (page_focus) ImGui::SetNextWindowFocus();
+    constexpr ImGuiWindowFlags Flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
     ImGui::Begin("##bbport_first_run", nullptr, Flags);
-    ImGui::PushFont(nullptr, 26.0f);
+    ImGui::PushFont(nullptr, 36.0f);
     ImGui::TextUnformatted("Bloodborne");
     ImGui::PopFont();
     ImGui::TextDisabled("bbport: first launch");
+    ImGui::TextWrapped("D-pad / left stick: move    Cross / A: select    Circle / B: back");
     ImGui::Separator();
     ImGui::Spacing();
     ImGui::PushTextWrapPos(width - ImGui::GetStyle().WindowPadding.x);
@@ -527,7 +540,7 @@ int FirstRun::Run() {
     exe_dir = base ? base : "";
     while (exe_dir.size() > 3 && (exe_dir.back() == '\\' || exe_dir.back() == '/')) exe_dir.pop_back();
 
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         std::printf("First run: SDL_Init failed: %s\n", SDL_GetError());
         return 2;
     }
@@ -550,13 +563,8 @@ int FirstRun::Run() {
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
-    ImGui::StyleColorsDark();
+    BbImGui::ControllerStyle();
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 6.0f;
-    style.FrameRounding = 4.0f;
-    style.WindowPadding = ImVec2(22.0f, 18.0f);
-    style.FramePadding = ImVec2(12.0f, 7.0f);
-    style.ItemSpacing = ImVec2(10.0f, 8.0f);
     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.07f, 0.07f, 0.08f, 0.96f);
     style.Colors[ImGuiCol_Border] = ImVec4(0.55f, 0.48f, 0.32f, 0.8f);
     style.Colors[ImGuiCol_Button] = ImVec4(0.22f, 0.20f, 0.17f, 1.0f);
@@ -576,7 +584,7 @@ int FirstRun::Run() {
     BbOverlay::FontData(&font, &font_size);
     ImFontConfig font_config;
     font_config.FontDataOwnedByAtlas = false;
-    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), font_size, 18.0f, &font_config);
+    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), font_size, BbImGui::FontSize, &font_config);
     ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer3_Init(renderer);
 
@@ -594,8 +602,18 @@ int FirstRun::Run() {
         PollInstall();
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
+        BbImGui::PollDirections();
+        const bool was_editing = ImGui::IsAnyItemActive() ||
+            ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         ImGui::NewFrame();
         Draw();
+        if (!dialog_open && !was_editing &&
+            (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+             ImGui::IsKeyPressed(ImGuiKey_Escape, false))) {
+            if (page == Page::Choose || page == Page::Done) quit = true;
+            else if (page == Page::Installing) SDL_KillProcess(process, true);
+            else page = page == Page::Failed ? Page::Packages : Page::Choose;
+        }
         ImGui::Render();
         SDL_SetRenderTarget(renderer, target);
         SDL_SetRenderDrawColor(renderer, 10, 10, 12, 255);

@@ -12,6 +12,7 @@
 
 #include <SDL3/SDL.h>
 #include "bbport_settings.h"
+#include "bbport_imgui.h"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -53,6 +54,11 @@ std::mutex imgui_mutex; // the ImGui context: window thread (input) and present 
 bool initialized = false;
 std::atomic<bool> menu_open{false};
 bool l3_down = false, r3_down = false;
+bool controller_input = false;
+uint32_t controller_buttons = 0;
+std::array<float, SDL_GAMEPAD_AXIS_COUNT> controller_axes{};
+std::atomic<bool> input_release{false};
+bool menu_focus = false;
 bool dirty = false; // settings changed while open: saved on close
 float base_scale = 1.0f; // UI scale factor for the display height (1080p = 1)
 
@@ -62,6 +68,9 @@ float base_scale = 1.0f; // UI scale factor for the display height (1080p = 1)
 struct TextDialog {
     bool open = false;          // an entry is in progress (the guest is polling)
     bool focus = false;         // focus the text field once when opened
+    bool keyboard_focus = false;
+    bool editing = false;
+    bool uppercase = false;
     int state = 0;              // 0 typing, 1 confirmed, 2 cancelled
     std::string text;           // UTF-8, the value the guest reads
     std::string title;          // the prompt above the box
@@ -110,6 +119,49 @@ void NormalizeCaret() {
     text_dialog.cursor = std::min(text_dialog.cursor, SplitCodePoints(text_dialog.text).size());
 }
 
+bool ControllerHeld() {
+    if (controller_buttons) return true;
+    for (float axis : controller_axes) if (std::abs(axis) > 0.0f) return true;
+    return false;
+}
+
+void DeleteTextCharacter() {
+    auto points = SplitCodePoints(text_dialog.text);
+    if (!points.empty()) text_dialog.text.resize(text_dialog.text.size() - points.back().size());
+}
+
+void TextKeyboard() {
+    const float gap = ImGui::GetStyle().ItemSpacing.x;
+    const float key_width = (ImGui::GetContentRegionAvail().x - gap * 9.0f) / 10.0f;
+    const char* keys = text_dialog.uppercase ? "1234567890QWERTYUIOPASDFGHJKL-ZXCVBNM.,'"
+                                           : "1234567890qwertyuiopasdfghjkl-zxcvbnm.,'";
+    for (int i = 0; keys[i]; ++i) {
+        if (i % 10) ImGui::SameLine();
+        ImGui::PushID(i);
+        char label[16];
+        std::snprintf(label, sizeof(label), "%c###key", keys[i]);
+        if (text_dialog.keyboard_focus && i == 10) {
+            ImGui::SetKeyboardFocusHere();
+            text_dialog.keyboard_focus = false;
+        }
+        if (ImGui::Button(label, ImVec2(key_width, 0.0f))) {
+            text_dialog.text += keys[i];
+            ClampTextToCapacity();
+        }
+        ImGui::PopID();
+    }
+    const float third = (ImGui::GetContentRegionAvail().x - gap * 2.0f) / 3.0f;
+    if (ImGui::Button(text_dialog.uppercase ? "Lowercase###case" : "Uppercase###case", ImVec2(third, 0)))
+        text_dialog.uppercase = !text_dialog.uppercase;
+    ImGui::SameLine();
+    if (ImGui::Button("Space", ImVec2(third, 0))) {
+        text_dialog.text += ' ';
+        ClampTextToCapacity();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Delete", ImVec2(third, 0))) DeleteTextCharacter();
+}
+
 // Closes the entry with `state` (1 confirmed, 2 cancelled) and hands the result to the guest.
 void FinishTextInput(int state) {
     if (state != 1) { // a cancelled entry leaves the guest's buffer as it was
@@ -118,6 +170,7 @@ void FinishTextInput(int state) {
     text_dialog.state = state;
     text_dialog.open = false;
     text_input_open = false;
+    input_release = ControllerHeld();
     // The cursor follows the settings menu again (both cannot be open at once).
     ImGui::GetIO().MouseDrawCursor = menu_open;
 }
@@ -133,12 +186,14 @@ void TextDialogWindow() {
 
     const ImVec2 center = ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
                                  viewport->WorkPos.y + viewport->WorkSize.y * 0.5f);
-    const float width = std::min(560.0f * base_scale, viewport->WorkSize.x * 0.8f);
+    const float width = std::min(960.0f * base_scale, viewport->WorkSize.x * 0.94f);
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(width, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(width, viewport->WorkSize.y * 0.94f));
     ImGui::SetNextWindowBgAlpha(0.0f);
-    constexpr ImGuiWindowFlags Flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav |
+    constexpr ImGuiWindowFlags Flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
+                                      ImGuiWindowFlags_NoSavedSettings |
                                       ImGuiWindowFlags_AlwaysAutoResize;
     ImGui::Begin("##bbport_text_input", nullptr, Flags);
     // Centered title without PushTextAlign (this ImGui version has no text-align stack): the
@@ -171,14 +226,16 @@ void TextDialogWindow() {
         text_dialog.text = text.data();
         ClampTextToCapacity();
     }
+    text_dialog.editing = ImGui::IsItemActive();
     ImGui::PopStyleColor(4); // FrameBg, FrameBgHovered, FrameBgActive, Border
     ImGui::PopStyleVar(2);
-    ImGui::SetItemDefaultFocus();
-
     ImGui::Spacing();
+    TextKeyboard();
+    ImGui::TextWrapped("D-pad / left stick: move    Cross / A: select\n"
+                       "Circle / B: cancel    Options / Start: confirm");
     // Buttons take half the box each: a Button sizes itself from its label unless an explicit
     // size is given, so the width is passed to the label.
-    const ImVec2 button_size((width - ImGui::GetStyle().ItemSpacing.x) * 0.5f,
+    const ImVec2 button_size((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f,
                              ImGui::GetTextLineHeightWithSpacing() * 1.6f);
     if (ImGui::Button("OK", button_size)) {
         FinishTextInput(1);
@@ -191,9 +248,11 @@ void TextDialogWindow() {
 
     // Enter confirms and Escape cancels, the way the game's own system dialogs do.
     NormalizeCaret();
-    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
+    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false) ||
+        ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)) {
         FinishTextInput(1);
-    } else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+    } else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+               ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
         FinishTextInput(2);
     }
 }
@@ -203,6 +262,12 @@ void SetOpen(bool value) {
         return;
     }
     ImGui::GetIO().MouseDrawCursor = value || text_dialog.open;
+    menu_focus = value;
+    if (value) {
+        ImGui::GetIO().ClearEventsQueue();
+        ImGui::GetIO().ClearInputKeys();
+    }
+    if (!value) input_release = ControllerHeld();
     if (!value && dirty) {
         dirty = false;
         BbSettings::Save();
@@ -285,13 +350,22 @@ void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
 
 void Hint(const char* text) {
     ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
+    ImGui::PushID(text);
+    if (ImGui::Button("?")) ImGui::OpenPopup("Help");
     if (ImGui::BeginItemTooltip()) {
         ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
         ImGui::TextUnformatted(text);
         ImGui::PopTextWrapPos();
         ImGui::EndTooltip();
     }
+    if (ImGui::BeginPopup("Help")) {
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 26.0f);
+        ImGui::TextUnformatted(text);
+        ImGui::PopTextWrapPos();
+        if (ImGui::Button("Close help")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopID();
 }
 
 void Menu() {
@@ -306,8 +380,10 @@ void Menu() {
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.0f * base_scale,
                                        viewport->WorkPos.y + 40.0f * base_scale),
                                 ImGuiCond_Appearing);
-        ImGui::SetNextWindowSize(ImVec2(620.0f * base_scale, 0.0f), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(ImVec2(std::min(1040.0f * base_scale, viewport->WorkSize.x * 0.94f),
+                                      viewport->WorkSize.y * 0.9f), ImGuiCond_Appearing);
     }
+    if (menu_focus) ImGui::SetNextWindowFocus();
     bool keep_open = true;
     if (!ImGui::Begin("Bloodborne — settings  (F1 / L3+R3)", &keep_open,
                       ImGuiWindowFlags_NoCollapse)) {
@@ -316,13 +392,20 @@ void Menu() {
     }
     ImGui::Text("%.0f FPS  (%.1f ms)", frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f,
                 frame_ms_avg);
+    ImGui::TextWrapped("D-pad / left stick: move    Cross / A: select or edit    Circle / B: back\n"
+                       "Right stick: scroll    L1 / R1: slow / fast adjustment    L3+R3: close");
 
     ImGui::SeparatorText("Temporal upscaler");
     static const char* upscalers[] = {"Off", "FSR 3.1", "FSR 4 (INT8)", "FSR 4.1.1 (INT8)",
                                      "TAA (native anti-aliasing)", "DLSS (NVIDIA)"};
     static const char* later[] = {"XeSS"};
     int upscaler = s.upscaler;
-    if (ImGui::BeginCombo("Upscaler", upscalers[upscaler])) {
+    const bool upscaler_open = ImGui::BeginCombo("Upscaler", upscalers[upscaler]);
+    if (menu_focus) {
+        ImGui::SetItemDefaultFocus();
+        menu_focus = false;
+    }
+    if (upscaler_open) {
         for (int i = 0; i < BbSettings::UpscalerCount; ++i) {
             const bool supported = i == BbSettings::UpscalerFsr4 ? s.fsr4_supported.load()
                 : i == BbSettings::UpscalerFsr411 ? s.fsr411_supported.load()
@@ -707,6 +790,22 @@ void FpsCounter() {
     ImGui::End();
 }
 
+// Also used by the headless navigation regression test: the same widgets and frame logic,
+// without the Vulkan presenter. Back only closes the outer menu when no editor/popup was open.
+void DrawUi() {
+    const bool was_editing = ImGui::IsAnyItemActive() ||
+        ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    ImGui::NewFrame();
+    if (menu_open && !text_dialog.open) {
+        Menu();
+        if (!was_editing && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+                             ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))) SetOpen(false);
+    }
+    if (BbSettings::Get().show_fps && !menu_open) FpsCounter();
+    if (text_dialog.open) TextDialogWindow();
+    ImGui::Render();
+}
+
 } // namespace
 
 void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) {
@@ -723,17 +822,12 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
     io.BackendPlatformName = "bbport";
 
-    ImGui::StyleColorsDark();
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 6.0f;
-    style.FrameRounding = 4.0f;
-    style.GrabRounding = 4.0f;
-    style.Colors[ImGuiCol_WindowBg].w = 0.92f;
+    BbImGui::ControllerStyle();
 
     ImFontConfig font_config;
     font_config.FontDataOwnedByAtlas = false;
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(bb_font_ttf),
-                                   int(bb_font_ttf_end - bb_font_ttf), 18.0f, &font_config);
+                                   int(bb_font_ttf_end - bb_font_ttf), BbImGui::FontSize, &font_config);
 
     const vk::Instance vk_instance = instance.GetInstance();
     ImGui_ImplVulkan_LoadFunctions(
@@ -800,16 +894,16 @@ bool HandleEvent(const SDL_Event& event) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
         const bool down = event.type == SDL_EVENT_KEY_DOWN;
-        // F1 (Insert, the old key, still works) toggles; Escape closes. With the text dialog
-        // open, Escape belongs to the dialog (TextDialogWindow reads KeyEscape).
+        // Escape backs out of editing/popups before closing (handled after ImGui).
         const bool toggle = !text_open && (event.key.key == SDLK_F1 || event.key.key == SDLK_INSERT);
-        if (down && !event.key.repeat && (toggle || (is_open && !text_open && event.key.key == SDLK_ESCAPE))) {
-            SetOpen(toggle ? !is_open : false);
+        if (down && !event.key.repeat && toggle) {
+            SetOpen(!is_open);
             return true;
         }
         if (!is_open) {
             return false;
         }
+        if (down) controller_input = false;
         io.AddKeyEvent(ImGuiMod_Ctrl, (event.key.mod & SDL_KMOD_CTRL) != 0);
         io.AddKeyEvent(ImGuiMod_Shift, (event.key.mod & SDL_KMOD_SHIFT) != 0);
         io.AddKeyEvent(ImGuiMod_Alt, (event.key.mod & SDL_KMOD_ALT) != 0);
@@ -822,23 +916,61 @@ bool HandleEvent(const SDL_Event& event) {
     case SDL_EVENT_GAMEPAD_BUTTON_UP: {
         const bool down = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
         const u8 button = event.gbutton.button;
+        if (button >= 32) return is_open;
+        const bool chord_before = l3_down && r3_down;
+        if (down) controller_buttons |= uint32_t(1) << button;
+        else controller_buttons &= ~(uint32_t(1) << button);
         if (button == SDL_GAMEPAD_BUTTON_LEFT_STICK) {
             l3_down = down;
         } else if (button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) {
             r3_down = down;
         }
-        if (down && l3_down && r3_down) {
+        if (input_release && !ControllerHeld()) input_release = false;
+        if (down) {
+            controller_input = true;
+            if (text_open && text_dialog.editing) text_dialog.keyboard_focus = true;
+        }
+        if (!text_open && !chord_before && l3_down && r3_down) {
             SetOpen(!is_open);
             return true;
         }
         if (!is_open) {
             return false;
         }
-        if (const ImGuiKey key = KeyFromGamepad(button); key != ImGuiKey_None) {
+        if (button >= SDL_GAMEPAD_BUTTON_DPAD_UP && button <= SDL_GAMEPAD_BUTTON_DPAD_RIGHT) {
+            BbImGui::Directions(controller_buttons, controller_axes);
+        } else if (const ImGuiKey key = KeyFromGamepad(button); key != ImGuiKey_None) {
             io.AddKeyEvent(key, down);
         }
         return true;
     }
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
+        const int axis = event.gaxis.axis;
+        if (axis < 0 || axis >= SDL_GAMEPAD_AXIS_COUNT) return is_open;
+        controller_axes[axis] = BbImGui::AxisValue(event.gaxis.value);
+        if (input_release && !ControllerHeld()) input_release = false;
+        if (std::abs(controller_axes[axis]) > 0.0f) controller_input = true;
+        if (!is_open) return false;
+        if (text_open && text_dialog.editing &&
+            (axis == SDL_GAMEPAD_AXIS_LEFTX || axis == SDL_GAMEPAD_AXIS_LEFTY) &&
+            std::abs(controller_axes[axis]) > 0.0f) text_dialog.keyboard_focus = true;
+        BbImGui::Directions(controller_buttons, controller_axes);
+        switch (axis) {
+        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:
+            io.AddKeyAnalogEvent(ImGuiKey_GamepadL2, controller_axes[axis] > 0, controller_axes[axis]); break;
+        case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER:
+            io.AddKeyAnalogEvent(ImGuiKey_GamepadR2, controller_axes[axis] > 0, controller_axes[axis]); break;
+        }
+        return true;
+    }
+    case SDL_EVENT_GAMEPAD_REMOVED:
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        controller_buttons = 0;
+        controller_axes.fill(0.0f);
+        l3_down = r3_down = false;
+        input_release = false;
+        io.ClearInputKeys();
+        return false;
     case SDL_EVENT_TEXT_INPUT: {
         // Typed characters (Ctrl+click on a slider, a text field): key events alone erase but
         // do not type. SDL sends them while text input is on (UpdateTextInput).
@@ -866,6 +998,7 @@ bool HandleEvent(const SDL_Event& event) {
                            : event.button.button == SDL_BUTTON_MIDDLE ? 2
                                                                       : -1;
         if (button >= 0) {
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) controller_input = false;
             io.AddMouseButtonEvent(button, event.type == SDL_EVENT_MOUSE_BUTTON_DOWN);
         }
         return true;
@@ -886,6 +1019,8 @@ bool BeginTextInput(const std::string& initial, const std::string& title) {
     if (!initialized) {
         return false; // no overlay yet (before the first present): the guest falls back
     }
+    ImGui::GetIO().ClearEventsQueue();
+    ImGui::GetIO().ClearInputKeys();
     text_dialog.text = initial;
     ClampTextToCapacity();
     text_dialog.initial = initial;
@@ -893,7 +1028,10 @@ bool BeginTextInput(const std::string& initial, const std::string& title) {
     text_dialog.cursor = SplitCodePoints(initial).size();
     text_dialog.state = 0;
     text_dialog.open = true;
-    text_dialog.focus = true;
+    text_dialog.focus = !controller_input;
+    text_dialog.keyboard_focus = controller_input;
+    text_dialog.editing = false;
+    text_dialog.uppercase = false;
     text_input_open = true;
     // The dialog is modal: the cursor stays visible while it is up, whatever the settings menu
     // did before.
@@ -933,7 +1071,7 @@ void FontData(const unsigned char** data, int* size) {
 }
 
 bool CapturesInput() {
-    return menu_open || text_dialog.open;
+    return menu_open || text_input_open || input_release;
 }
 
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
@@ -964,18 +1102,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     }
 
     ImGui_ImplVulkan_NewFrame();
-    ImGui::NewFrame();
-    if (menu_open) {
-        Menu();
-    }
-    if (BbSettings::Get().show_fps && !menu_open) {
-        FpsCounter();
-    }
-    // The system text dialog draws last: it is modal, with a dimmed frame behind it.
-    if (text_dialog.open) {
-        TextDialogWindow();
-    }
-    ImGui::Render();
+    DrawUi();
 
     const vk::RenderingAttachmentInfo attachment{
         .imageView = view,
