@@ -214,6 +214,19 @@ else()
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
+if(NOT WIN32)
+    # Include the overlay implementation to exercise its real ImGui field in a headless
+    # context; Vulkan initialization/rendering sections are not used by this test.
+    add_executable(text-input-test EXCLUDE_FROM_ALL ../tests/test_text_input.cpp
+        ../tests/test_gpu_runtime_stubs.cpp)
+    target_include_directories(text-input-test PRIVATE shim shadps4 third_party/imgui
+        third_party/imgui/backends third_party/gcn/include)
+    target_compile_definitions(text-input-test PRIVATE IMGUI_IMPL_VULKAN_NO_PROTOTYPES
+        BB_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/third_party/fonts/DejaVuSans.ttf")
+    target_compile_options(text-input-test PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
+    target_link_options(text-input-test PRIVATE -Wl,--gc-sections)
+    target_link_libraries(text-input-test PRIVATE bbgpu)
+endif()
 add_executable(frame-gen-pacing-test EXCLUDE_FROM_ALL ../tests/test_frame_gen_pacing.cpp)
 target_compile_options(frame-gen-pacing-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(frame-gen-pacing-test PRIVATE ..)

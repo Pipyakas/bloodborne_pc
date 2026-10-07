@@ -2,6 +2,7 @@
 #include "bbport_overlay.h"
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -60,6 +61,7 @@ float base_scale = 1.0f; // UI scale factor for the display height (1080p = 1)
 // the present thread draws it, so every access to these fields takes imgui_mutex.
 struct TextDialog {
     bool open = false;          // an entry is in progress (the guest is polling)
+    bool focus = false;         // focus the text field once when opened
     int state = 0;              // 0 typing, 1 confirmed, 2 cancelled
     std::string text;           // UTF-8, the value the guest reads
     std::string title;          // the prompt above the box
@@ -156,7 +158,17 @@ void TextDialogWindow() {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f * base_scale, 8.0f * base_scale));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.55f, 0.48f, 0.32f, 1.0f));
-    if (ImGui::InputText("##bbport_text_value", text_dialog.text.data(), TextCapacity() + 1)) {
+    // InputText needs writable, sized storage, not std::string::data() with spare capacity:
+    // it changes the bytes but cannot update the string's length. Allow UTF-8's four bytes
+    // per code point, then apply the character limit after copying back.
+    std::array<char, 255 * 4 + 1> text{};
+    std::snprintf(text.data(), text.size(), "%s", text_dialog.text.c_str());
+    if (text_dialog.focus) {
+        ImGui::SetKeyboardFocusHere();
+        text_dialog.focus = false;
+    }
+    if (ImGui::InputText("##bbport_text_value", text.data(), text.size())) {
+        text_dialog.text = text.data();
         ClampTextToCapacity();
     }
     ImGui::PopStyleColor(4); // FrameBg, FrameBgHovered, FrameBgActive, Border
@@ -875,11 +887,13 @@ bool BeginTextInput(const std::string& initial, const std::string& title) {
         return false; // no overlay yet (before the first present): the guest falls back
     }
     text_dialog.text = initial;
+    ClampTextToCapacity();
     text_dialog.initial = initial;
     text_dialog.title = title;
     text_dialog.cursor = SplitCodePoints(initial).size();
     text_dialog.state = 0;
     text_dialog.open = true;
+    text_dialog.focus = true;
     text_input_open = true;
     // The dialog is modal: the cursor stays visible while it is up, whatever the settings menu
     // did before.
@@ -890,9 +904,8 @@ bool BeginTextInput(const std::string& initial, const std::string& title) {
 
 int PollTextInput(std::string& out) {
     std::scoped_lock lock{imgui_mutex};
-    if (!text_dialog.open) {
-        return 2; // nothing open: the guest's fallback path
-    }
+    // Closing the UI is not cancelling the request: retain its completed state and text
+    // until BeginTextInput starts the next request (the guest polls after the UI closes).
     out = text_dialog.text;
     return text_dialog.state;
 }
@@ -903,6 +916,7 @@ bool SubmitText(const std::string& submitted) {
         return false;
     }
     text_dialog.text = submitted;
+    ClampTextToCapacity();
     FinishTextInput(1);
     return true;
 }
