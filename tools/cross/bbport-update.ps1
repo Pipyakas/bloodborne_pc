@@ -21,7 +21,8 @@ $archive = Join-Path $env:TEMP 'bbport-update.tar.gz'
 # cmd's redirection keeps the archive's bytes intact (PowerShell 5's would re-encode them).
 cmd /c "ssh -o BatchMode=yes -o ConnectTimeout=4 $remote `"tar -C $dist -czf - .`" > `"$archive`""
 if ($LASTEXITCODE -ne 0) { Write-Host 'Download failed: starting the installed build.'; exit 0 }
-tar -xzf $archive -C $root
+# Windows's own tar (bsdtar): a GNU tar earlier on PATH would read "C:" as a remote host.
+& "$env:SystemRoot\System32\tar.exe" -xzf $archive -C $root
 if ($LASTEXITCODE -ne 0) { Write-Host 'Unpacking failed: the installed build may be incomplete.'; exit 1 }
 Remove-Item $archive -ErrorAction SilentlyContinue
 Write-Host "Updated: $latest"
