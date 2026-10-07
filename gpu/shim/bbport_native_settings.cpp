@@ -64,7 +64,7 @@ constexpr char kSsr[] = "effect_ssr";
 std::array<int, BbSettings::UpscalerCount> upscalers{};
 int upscaler_count = 0;
 const char16_t* const UpscalerLabels[BbSettings::UpscalerCount] = {
-    u"Off", u"FSR 3.1", u"FSR 4", u"FSR 4.1.1", u"TAA", u"DLSS"};
+    u"Off", u"FSR 3.1", u"FSR 4", u"TAA", u"DLSS"};
 std::array<const char16_t*, BbSettings::UpscalerCount> upscaler_labels{};
 
 // The presets, then Dynamic (dynamic_resolution: it replaces the preset's fixed size).
@@ -264,7 +264,6 @@ void BuildChoices() {
     upscaler_count = 0;
     for (int u = 0; u < BbSettings::UpscalerCount; ++u) {
         const bool supported = (u != BbSettings::UpscalerFsr4 || v.fsr4_supported) &&
-                               (u != BbSettings::UpscalerFsr411 || v.fsr411_supported) &&
                                (u != BbSettings::UpscalerDlss || v.dlss_supported);
         if (supported) {
             upscalers[upscaler_count] = u;

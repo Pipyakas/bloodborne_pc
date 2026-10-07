@@ -49,6 +49,8 @@ public:
     /// Records one upscale; false with Error() set when it cannot (assets, device, sizes).
     bool Record(const Frame& frame);
     [[nodiscard]] const std::string& Error() const noexcept;
+    /// The source DLL's version from the assets' manifest.json, empty without one.
+    [[nodiscard]] const std::string& Version() const noexcept;
     /// The asset set and sizes in use, for logs ("t2160_m0 2260x1272 -> 3840x2160").
     [[nodiscard]] std::string Describe() const;
 

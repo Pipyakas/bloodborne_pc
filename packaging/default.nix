@@ -9,10 +9,11 @@
 let
   lib = pkgs.lib;
   root = ./..;
-  # FSR 4.1.1 models are extracted from AMD's DLLs: never in a public package. BB_PACKAGE_FSR411=1
-  # (appimage.sh runs nix with --impure) bundles the local fsr4_411 for one's own devices.
-  fsr411 = builtins.getEnv "BB_PACKAGE_FSR411" == "1";
-  assetDirs = [ "scripts" "patches" "fsr4_shaders" "launcher" ] ++ lib.optional fsr411 "fsr4_411";
+  # The FSR 4 DLL model is extracted from AMD's DLLs: never in a public package.
+  # BB_PACKAGE_FSR4_DLL=1 (or BB_PACKAGE_FSR411=1, its name before fsr4_model; appimage.sh runs
+  # nix with --impure) bundles the local fsr4_dll (or fsr4_411) for one's own devices.
+  fsrDll = builtins.getEnv "BB_PACKAGE_FSR4_DLL" == "1" || builtins.getEnv "BB_PACKAGE_FSR411" == "1";
+  assetDirs = [ "scripts" "patches" "fsr4_shaders" "launcher" ] ++ lib.optionals fsrDll [ "fsr4_dll" "fsr4_411" ];
   # Only what the package needs (the tree also holds builds, profiles and captures).
   wanted = [
     "run.sh" "out" "out/bb-probe" "out/bb-gpu-capabilities" "out/gpu" "out/gpu/libbbgpu.so"
@@ -79,22 +80,24 @@ pkgs.stdenv.mkDerivation {
     mkdir -p $d/bin $out/bin
     cp run.sh $d/
     cp -r scripts patches fsr4_shaders launcher $d/
-    # FSR 4.1.1 models only with BB_PACKAGE_FSR411=1 (see above); otherwise run.sh finds them in
-    # the data directory (~/.local/share/bbport/fsr4_411).
-    if [ -d fsr4_411 ]; then
-      ${pkgs.python3}/bin/python3 - <<'PY'
+    # The FSR 4 DLL model only with BB_PACKAGE_FSR4_DLL=1 (see above); otherwise run.sh finds it
+    # in the data directory (~/.local/share/bbport/fsr4_dll).
+    for folder in fsr4_dll fsr4_411; do
+      [ -d $folder ] || continue
+      ${pkgs.python3}/bin/python3 - $folder <<'PY'
     import sys
     from pathlib import Path
     sys.path.insert(0, 'launcher')
-    from bbport_assets import fsr411_problem
+    from bbport_assets import dll_model_problem
     for output in ('1920x1080', '3840x2160'):
         for preset in (0, 4):
-            problem = fsr411_problem(Path('fsr4_411'), output, preset)
+            problem = dll_model_problem(Path(sys.argv[1]), output, preset)
             if problem:
                 raise SystemExit(problem)
     PY
-      cp -r fsr4_411 $d/
-    fi
+      cp -r $folder $d/
+      break
+    done
     install -m755 out/bb-probe $d/bin/bb-probe
     install -m755 out/bb-gpu-capabilities $d/bin/bb-gpu-capabilities
     install -Dm755 out/gpu/libbbgpu.so $d/bin/gpu/libbbgpu.so

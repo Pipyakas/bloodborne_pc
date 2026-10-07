@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <utility>
@@ -25,6 +26,23 @@ std::string AssetDir() {
     const char* dir = std::getenv("BB_FSR4_DIR");
     return dir && dir[0] ? dir : "fsr4_shaders";
 }
+
+/// The DLL model's assets (tools/fsr4cap/build_assets.sh): BB_FSR4_DLL_DIR, else fsr4_dll; the
+/// names before fsr4_model (BB_FSR411_DIR, fsr4_411) still work.
+std::string DllAssetDir() {
+    for (const char* name : {"BB_FSR4_DLL_DIR", "BB_FSR411_DIR"}) {
+        if (const char* dir = std::getenv(name); dir && dir[0]) {
+            return dir;
+        }
+    }
+    std::error_code ec;
+    return std::filesystem::is_directory("fsr4_411", ec) && !std::filesystem::is_directory("fsr4_dll", ec)
+               ? "fsr4_411"
+               : "fsr4_dll";
+}
+
+// Outlives the provider: the menu reads it through BbSettings::fsr4_dll_version.
+std::string dll_version;
 
 bool ReadFile(const std::string& path, std::vector<u8>& data) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -69,10 +87,13 @@ struct Fsr4Upscaler::Impl {
     bool fatal = false;
     u64 next_frame_id = 1;
     std::deque<std::pair<u64, u64>> in_flight; ///< provider frame id, scheduler tick
-    // bbport: FSR 4.1.1 (upscaler=fsr411): the replay of AMD's 4.1.1 DLL (fsr411/).
+    // bbport: the DLL model (fsr4_model auto/dll): the replay of the user's AMD upscaler DLL
+    // (fsr411/). When it cannot run, v07 runs instead; it is retried for another output size.
     std::unique_ptr<Fsr411::Upscaler> fsr411;
     std::deque<u64> fsr411_ticks; ///< scheduler ticks of its recent frames (constant ring)
     std::string fsr411_described;
+    u32 dll_failed_width = 0, dll_failed_height = 0;
+    std::string dll_note; ///< why the selected DLL model is not running (menu)
 
     Impl(const Instance& instance_, Scheduler& scheduler_)
         : instance{instance_}, scheduler{scheduler_} {}
@@ -228,15 +249,33 @@ struct Fsr4Upscaler::Impl {
         return ffxFsr4VkSetExternalImageState(&backend, &state);
     }
 
-    bool Record411(const Frame& f) {
-        if (!instance.IsFsr411Supported()) {
-            Fail("FSR 4.1.1 needs INT8 dot products and VK_VALVE_shader_mixed_float_dot_product", true);
+    /// Whether this frame tries the DLL model; sets dll_note when the user chose it and it
+    /// cannot run.
+    bool WantDll(const Frame& f) {
+        const int choice = BbSettings::Get().fsr4_model;
+        if (choice == BbSettings::Fsr4ModelSdk) {
             return false;
         }
+        const bool chosen = choice == BbSettings::Fsr4ModelDll;
+        if (!instance.IsFsr4DllSupported()) {
+            dll_note = chosen ? "the GPU lacks VK_VALVE_shader_mixed_float_dot_product; "
+                                "using the SDK v07 model"
+                              : "";
+            return false;
+        }
+        if (dll_failed_width == f.output.width && dll_failed_height == f.output.height) {
+            return false;
+        }
+        std::error_code ec;
+        return chosen || std::filesystem::is_directory(DllAssetDir(), ec);
+    }
+
+    bool Record411(const Frame& f) {
         if (!fsr411) {
-            const char* env = std::getenv("BB_FSR411_DIR");
             fsr411 = std::make_unique<Fsr411::Upscaler>(instance.GetPhysicalDevice(), instance.GetDevice(),
-                                                        env && env[0] ? env : "fsr4_411");
+                                                        DllAssetDir());
+            dll_version = fsr411->Version();
+            BbSettings::Get().fsr4_dll_version = dll_version.c_str();
         }
         // Its constant ring holds kFramesInFlight frames: the oldest must be done.
         while (fsr411_ticks.size() >= Fsr411::kFramesInFlight) {
@@ -259,22 +298,31 @@ struct Fsr4Upscaler::Impl {
         g.reset = f.reset;
         g.auto_exposure = f.auto_exposure;
         if (!fsr411->Record(g)) {
-            // Missing assets are permanent for this session; the menu shows the reason.
-            Fail("FSR 4.1.1: " + fsr411->Error(), fsr411->Error().starts_with("missing"));
+            // v07 runs instead until the output size changes; the menu shows why if chosen.
+            dll_failed_width = f.output.width;
+            dll_failed_height = f.output.height;
+            std::printf("Upscaler: FSR 4 DLL model unavailable (%s); using the SDK v07 model\n",
+                        fsr411->Error().c_str());
+            dll_note = BbSettings::Get().fsr4_model == BbSettings::Fsr4ModelDll
+                           ? fsr411->Error() + "; using the SDK v07 model"
+                           : "";
             return false;
         }
         fsr411_ticks.push_back(scheduler.CurrentTick());
         if (const std::string d = fsr411->Describe(); d != fsr411_described) {
             fsr411_described = d;
-            std::printf("Upscaler: FSR 4.1.1 replay, %s\n", d.c_str());
+            std::printf("Upscaler: FSR 4 DLL model %s, %s\n",
+                        dll_version.empty() ? "(version unknown)" : dll_version.c_str(), d.c_str());
         }
         problem.clear();
+        dll_note.clear();
+        BbSettings::Get().fsr4_model_active = BbSettings::Fsr4ModelDll;
         return true;
     }
 
     bool Record(const Frame& f) {
-        if (BbSettings::Get().upscaler == BbSettings::UpscalerFsr411) {
-            return Record411(f);
+        if (WantDll(f) && Record411(f)) {
+            return true;
         }
         if (fatal) {
             return false;
@@ -370,7 +418,8 @@ struct Fsr4Upscaler::Impl {
             return false;
         }
         in_flight.emplace_back(frame_id, scheduler.CurrentTick());
-        problem.clear();
+        problem = dll_note; // v07 runs; if the DLL model was chosen, the menu says why not
+        BbSettings::Get().fsr4_model_active = BbSettings::Fsr4ModelSdk;
         return true;
     }
 };

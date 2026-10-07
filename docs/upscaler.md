@@ -17,12 +17,23 @@ FSR Native AA is not a fast pass-through: it renders at the output resolution an
 also executes the temporal reconstruction (including the model for FSR 4) and
 optional sharpening. It can therefore be slower than no AA at the same output.
 
-FSR 4.1.1 assets have separate 1080p/2160p tiers and standard/Ultra models:
+**FSR 4 models (2026-10-07).** FSR 4 is one upscaler with two networks, `fsr4_model=auto|dll|sdk`:
+the bundled SDK v07 model, or the DLL model replayed from the user's own AMD upscaler DLL
+(what was `upscaler=fsr411`, still read as `fsr4_model=dll`). The port never loads an AMD DLL at
+run time, so there is no `ffxQueryVersions` to ask: `tools/fsr4cap/manifest.py` writes
+`manifest.json` next to the assets with the source DLL's file version, after checking that each
+set's weights occur verbatim in that DLL, and the pass layout (`fsr4cap-1`). The menu and the FPS
+counter show that version; the runtime refuses another layout. Auto, and a DLL model that cannot
+run (missing assets for this output tier, device feature, layout), run v07 instead of falling back
+to FSR 3.1; the DLL model is retried after an output change. AMD's 4.1.1.2740 (The Witcher 3) and
+4.1.1.3529 (CONTROL Resonant) DLLs give byte-identical assets for all four sets.
+
+DLL model assets have separate 1080p/2160p tiers and standard/Ultra models:
 `t1080_m0`, `t1080_m1`, `t2160_m0`, `t2160_m1`. Outputs above 1080p need the 2160
 tier, irrespective of the preset. A missing `t2160_m0/spd.spv` means missing
 assets, not a GPU feature failure. These assets are not bundled: build the full
-set with `tools/fsr4cap/build_assets.sh` and put it in `BB_FSR411_DIR` or the
-packaged data directory's `fsr4_411`. Fatal asset failures now select FSR 3.1 in
+set with `tools/fsr4cap/build_assets.sh` and put it in `BB_FSR4_DLL_DIR` or the
+packaged data directory's `fsr4_dll` (`BB_FSR411_DIR` and `fsr4_411` still work). Fatal asset failures now select FSR 3.1 in
 the live settings, so the menu shows the active provider, retains the error, and
 allows retrying FSR 4 after changing the output/installing assets.
 

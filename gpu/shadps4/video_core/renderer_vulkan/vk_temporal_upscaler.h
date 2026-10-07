@@ -188,6 +188,7 @@ private:
     SceneTargets& scene_targets;
     int applied_preset = -1;
     int applied_upscaler = -1;
+    int applied_fsr4_model = -1;
     bool dispatched_last_frame = false;
     u32 context_width = 0, context_height = 0; ///< the FSR 3 context's largest render size
     /// Dynamic resolution (BbSettings dynamic_resolution): the render size in percent of the

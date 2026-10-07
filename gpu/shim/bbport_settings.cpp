@@ -25,9 +25,20 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     const float f = float(std::atof(value.c_str()));
     const int i = std::atoi(value.c_str());
     if (key == "upscaler") {
+        // Before fsr4_model: upscaler=fsr411 was the DLL model.
+        if (value == "fsr411") {
+            v.upscaler = UpscalerFsr4;
+            v.fsr4_model = Fsr4ModelDll;
+        }
         for (int u = 0; u < UpscalerCount; ++u) {
             if (value == UpscalerName(u)) {
                 v.upscaler = u;
+            }
+        }
+    } else if (key == "fsr4_model") {
+        for (int m = 0; m < Fsr4ModelCount; ++m) {
+            if (value == Fsr4ModelName(m)) {
+                v.fsr4_model = m;
             }
         }
     } else if (key == "preset") {
@@ -146,9 +157,7 @@ void Load() {
     // Environment overrides (scripts, A/B tests).
     if (const char* env = std::getenv("BB_UPSCALER")) {
         v.upscaler = UpscalerOff;
-        for (int u = 0; u < UpscalerCount; ++u) {
-            if (std::strcmp(env, UpscalerName(u)) == 0) v.upscaler = u;
-        }
+        Set(v, "upscaler", env);
     }
     const std::pair<const char*, const char*> env_keys[] = {
         {"BB_FSR_SHARPNESS", "sharpness"},        {"BB_JITTER", "jitter"},
@@ -157,6 +166,7 @@ void Load() {
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
         {"BB_LAUNCH", "launch"},
         {"BB_DLSS_MODEL", "dlss_model"},            {"BB_FRAME_GEN", "frame_gen"},
+        {"BB_FSR4_MODEL", "fsr4_model"},
         {"BB_RENDER_SCALE", "render_scale"},        {"BB_DYNAMIC_RES", "dynamic_resolution"},
     };
     for (const auto& [env, key] : env_keys) {
@@ -176,19 +186,18 @@ void Load() {
     v.startup_frame_gen = v.frame_gen;
 }
 
-void ConfigureUpscalerSupport(bool fsr4, bool fsr411, bool dlss) {
+void ConfigureUpscalerSupport(bool fsr4, bool fsr4_dll, bool dlss) {
     auto& v = Get();
     v.fsr4_supported = fsr4;
-    v.fsr411_supported = fsr4 && fsr411;
+    v.fsr4_dll_supported = fsr4 && fsr4_dll;
     v.dlss_supported = dlss;
     const int requested = v.upscaler;
     if (requested == UpscalerDlss && !dlss) {
         v.fsr4_problem = "DLSS needs an NVIDIA RTX GPU, its driver's NGX and nvngx_dlss; using FSR 3.1";
         std::printf("Upscaler: dlss unavailable; falling back to FSR 3.1 before the first frame\n");
         v.upscaler = UpscalerFsr3;
-    } else if ((requested == UpscalerFsr4 && !v.fsr4_supported) ||
-        (requested == UpscalerFsr411 && !v.fsr411_supported)) {
-        v.fsr4_problem = "GPU does not support the selected FSR 4 shaders; using FSR 3.1";
+    } else if (requested == UpscalerFsr4 && !v.fsr4_supported) {
+        v.fsr4_problem = "GPU does not support the FSR 4 shaders; using FSR 3.1";
         std::printf("Upscaler: %s unsupported on this GPU; falling back to FSR 3.1 before the first frame\n",
                     UpscalerName(requested));
         v.upscaler = UpscalerFsr3;
@@ -226,7 +235,7 @@ void Save() {
                  "# bbport settings (in-game menu: F1 / L3+R3)\n"
                  "upscaler=%s\npreset=%d\ndlss_model=%s\nframe_gen=%s\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
                  "reactive=%d\nobject_motion=%d\nreactive_scale=%.2f\nreactive_threshold=%.2f\nreactive_max=%.2f\n"
-                 "debug_view=%d\nshow_fps=%d\nfsr4_auto_exposure=%d\nfsr4_invert_jitter=%d\n",
+                 "debug_view=%d\nshow_fps=%d\nfsr4_auto_exposure=%d\nfsr4_invert_jitter=%d\nfsr4_model=%s\n",
                  UpscalerName(v.upscaler), v.preset.load(), DlssModels[v.dlss_model].key,
                  FrameGenName(v.frame_gen),
                  int(v.sharpen.load()),
@@ -234,7 +243,8 @@ void Save() {
                  int(v.object_motion.load()),
                  v.reactive_scale.load(), v.reactive_threshold.load(), v.reactive_max.load(),
                  v.debug_view.load(), int(v.show_fps.load()),
-                 int(v.fsr4_auto_exposure.load()), int(v.fsr4_invert_jitter.load()));
+                 int(v.fsr4_auto_exposure.load()), int(v.fsr4_invert_jitter.load()),
+                 Fsr4ModelName(v.fsr4_model));
     // Read by patches.py at start.
     for (int e = 0; e < EffectCount; ++e) {
         std::fprintf(file, "%s=%d\n", Effects[e].key, int(v.effects[e].load()));
@@ -290,9 +300,13 @@ const char* DlssGeneration(int ngx_preset) {
 }
 
 const char* UpscalerName(int upscaler) {
-    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa",
-                                                                  "dlss"};
+    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "taa", "dlss"};
     return names[std::clamp(upscaler, 0, UpscalerCount - 1)];
+}
+
+const char* Fsr4ModelName(int model) {
+    static constexpr const char* names[Fsr4ModelCount] = {"auto", "dll", "sdk"};
+    return names[std::clamp(model, 0, Fsr4ModelCount - 1)];
 }
 
 const char* LaunchName(int launch) {

@@ -28,7 +28,7 @@ bbport runs the original PlayStation 4 executable of *Bloodborne* (CUSA03173, ga
 executes natively; a small runtime written for this one game replaces the PS4 system libraries;
 the GPU work is translated to Vulkan by a renderer derived from
 [shadPS4](https://github.com/shadps4-emu/shadPS4) and heavily extended for this game, including
-temporal upscaling with AMD FSR 3.1, FSR 4 and FSR 4.1.1.
+temporal upscaling with AMD FSR 3.1 and FSR 4.
 
 > **No game files are included.** You need your own dump of Bloodborne (CUSA03173, v1.09).
 > This project is not affiliated with Sony Interactive Entertainment, FromSoftware or AMD.
@@ -57,12 +57,16 @@ Mesa/RADV) has been tested thoroughly.
   scene is jittered sub-pixel (Halton) and rendered at a reduced resolution; the upscaler fills
   the output (720p for the Steam Deck, 1080p, 1440p or 2160p) and the UI is drawn natively at the output resolution.
   - **FSR 3.1** (FireBurn/FSR-Vulkan).
-  - **FSR 4 (INT8, model v07)** on GPUs exposing the required Vulkan shader features —
-    RDNA2/3 included (see Requirements).
-  - **FSR 4.1.1 (INT8)**: AMD's 4.1.1 DLL is recorded once under vkd3d-proton and its passes
-    are replayed natively on Vulkan; the output is **bit-exact** with the DLL. The assets are
-    built on your machine from your own DLLs (`tools/fsr4cap`).
-  - Faster than AMD's own shaders on RDNA3: the final passes of FSR 4 and 4.1.1 were rewritten
+  - **FSR 4 (INT8)** on GPUs exposing the required Vulkan shader features — RDNA2/3 included
+    (see Requirements), with two sources for its network (*FSR 4 model*, `fsr4_model`):
+    - **SDK v07** (bundled): AMD's open FidelityFX SDK model.
+    - **AMD DLL model**: the network of your own `amd_fidelityfx_upscaler_dx12.dll` (from a game
+      or OptiScaler), recorded once under vkd3d-proton and replayed natively on Vulkan; the
+      output is **bit-exact** with the DLL. Its assets are built on your machine
+      (`tools/fsr4cap`) and record the DLL's version, which the menu and FPS counter show.
+      AMD's 4.1.1.2740 and 4.1.1.3529 give identical assets.
+    - *Auto* (default) uses the DLL model where its assets and GPU features are present, else v07.
+  - Faster than AMD's own shaders on RDNA3: the final passes of both FSR 4 models were rewritten
     to store through workgroup memory (3.5× and 2.3× faster, bit-exact); FSR 4 costs ~4 ms at
     4K on an RX 7800 XT instead of ~6 ms.
 - **Multi-threaded GPU command processing.** The PS4 command stream is decoded on one thread
@@ -82,7 +86,7 @@ Mesa/RADV) has been tested thoroughly.
 | System libraries | Broad HLE of the PS4 OS | A small runtime (`src/runtime_*.c`) that implements exactly what Bloodborne calls: memory, threads, sync, files, audio (incl. ATRAC9), pad, saves, AppContent |
 | GPU | shadPS4 video core and shader recompiler | The same core (vendored, GPL) with ~200 marked changes (`bbport:`) plus new modules: two-stage draw pipeline, render-state and texture-set memoization, render-scale proxies, motion vectors, FSR 3.1/4/4.1.1, frame capture and GPU profiler |
 | GPU thread | One thread processes the whole command stream (the bottleneck in Bloodborne) | Decode and draw recording run on separate threads; the work scales with the hardware threads (Steam Deck included) |
-| Upscaling | — | Temporal (FSR 3.1, FSR 4, FSR 4.1.1) with the game's own motion vectors and jitter |
+| Upscaling | — | Temporal (FSR 3.1, FSR 4) with the game's own motion vectors and jitter |
 | Game patches | Patch files applied by the emulator | The same community patches, compiled at start (`scripts/patches.py`); render resolution, effects and FPS from the launcher |
 
 Without shadPS4 there would be no bbport: its renderer and shader recompiler are the base of
@@ -92,10 +96,10 @@ the graphics side.
 
 - Linux x86-64, a Vulkan 1.3 GPU. Tested: AMD RX 7800 XT with Mesa 26 (RADV),
   RX 6700 XT with Mesa 26.2.2 (native FSR 3.1 and FSR 4 v07 INT8, including DRS).
-  FSR 4 / 4.1.1 require shader Float16, Int8/Int16, integer dot products, linear compute
-  derivatives and extended storage image formats; FSR 4.1.1 additionally requires
-  `VK_VALVE_shader_mixed_float_dot_product`. Unsupported choices fall back to FSR 3.1
-  before the first frame and are disabled in the in-game menu.
+  FSR 4 requires shader Float16, Int8/Int16, integer dot products, linear compute
+  derivatives and extended storage image formats; its DLL model additionally requires
+  `VK_VALVE_shader_mixed_float_dot_product` (else v07 runs). Unsupported choices fall back to
+  FSR 3.1 before the first frame and are disabled in the in-game menu.
 - Your decrypted game dump: the `CUSA03173` folder (eboot.bin, sce_module, ...), version 1.09.
 - To build: GCC, CMake, Ninja, Python 3, glslang, SDL3, Vulkan headers and the libraries in
   `shell.nix`. With [Nix](https://nixos.org) everything comes from `shell.nix` automatically.
@@ -175,15 +179,17 @@ not implement GPU occlusion culling.
 bash tools/fetch_fsr4_assets.sh      # FSR 4 v07 (MIT, built from AMD's source by Q2RTX)
 BB_FSR4_DIR="$HOME/.local/share/bbport/fsr4_shaders" bash tools/fetch_fsr4_assets.sh
 # Optional persistent install: KDE launches find these models after package updates.
-# FSR 4.1.1, from your own AMD DLLs (e.g. OptiScaler's FSR4_LATEST), needs Proton (GE-Proton):
+# FSR 4 DLL model, from your own AMD DLLs (4.1.x upscaler, 2.3.x loader; e.g. OptiScaler's
+# FSR4_LATEST or a game's), needs Proton (GE-Proton). Writes fsr4_dll/ with manifest.json;
+# tools/fsr4cap/manifest.py <assets> <upscaler dll> stamps a set built before manifests.
 bash tools/fsr4cap/build_assets.sh <amd_fidelityfx_upscaler_dx12.dll> <amd_fidelityfx_loader_dx12.dll>
 ```
 
 **AppImage** (Steam Deck): `bash build.sh && bash packaging/appimage.sh` →
 `dist/Bloodborne-bbport-x86_64.AppImage`; data in `~/.local/share/bbport`, `--play` starts the
-game without the launcher window (Game Mode). FSR 4.1.1 models are not packaged: build them
-(see above) into `~/.local/share/bbport/fsr4_411` (`BB_PACKAGE_FSR411=1` bundles a local
-`fsr4_411` into an AppImage for your own devices). On the Steam Deck pick the 1280×720 output (the
+game without the launcher window (Game Mode). The FSR 4 DLL model is not packaged: build it
+(see above) into `~/.local/share/bbport/fsr4_dll` (`BB_PACKAGE_FSR4_DLL=1` bundles a local
+`fsr4_dll` into an AppImage for your own devices; the older `fsr4_411` folder still works). On the Steam Deck pick the 1280×720 output (the
 game is 16:9; on the 1280×800 screen it gets thin bars).
 
 **Adding the AppImage to Steam** (*Add a Non-Steam Game*) needs no options; the compatibility tool
@@ -222,7 +228,7 @@ When running from source, install MangoHud separately. A diagnostic launch with
 `VK_LOADER_LAYERS_DISABLE=~implicit~` also disables MangoHud.
 
 Useful variables: `BB_FRAME_STATS=1` (frame statistics), `BB_GPU_PROFILE=1` (GPU time per
-pass), `BB_FSR4_PROFILE=1` (GPU time per FSR 4 pass), `BB_UPSCALER=taa|fsr3|fsr4|fsr411|off|none`,
+pass), `BB_FSR4_PROFILE=1` (GPU time per FSR 4 pass), `BB_UPSCALER=taa|fsr3|fsr4|off|none`, `BB_FSR4_MODEL=auto|dll|sdk`,
 `BB_FRAMES_AHEAD=N` (how many frames the GPU command thread may run ahead of the GPU; 1 by default,
 0 = unbounded), `BB_PRESENT_THREAD=0` (present on the vblank thread, as before),
 `BB_LIVE_RES=1` (live resolution changes instead of the startup patch for outputs other than 1080p),
@@ -423,10 +429,10 @@ covers file system and time zone details. With libc++ on Windows, `std::thread::
 |---|---|
 | `src/` | Loader (`probe.c`) and the HLE runtime |
 | `scripts/` | Offline preparation of the game image, module linking, patch compiler |
-| `gpu/` | Renderer library: vendored shadPS4 video core with this port's changes (`gpu/VENDOR.txt`), shims, ImGui menu, FSR 4.1.1 runtime (`gpu/shadps4/video_core/renderer_vulkan/fsr411`) |
+| `gpu/` | Renderer library: vendored shadPS4 video core with this port's changes (`gpu/VENDOR.txt`), shims, ImGui menu, FSR 4 DLL model replay (`gpu/shadps4/video_core/renderer_vulkan/fsr411`) |
 | `launcher/`, `packaging/` | GTK4 launcher; Nix package and AppImage |
 | `patches/` | Community patches for Bloodborne |
-| `tools/` | Developer tools: scripted runs, A/B toggles, FSR benchmark helpers, FSR 4 shader rewrites, `fsr4cap` (FSR 4.1.1 recording/extraction) |
+| `tools/` | Developer tools: scripted runs, A/B toggles, FSR benchmark helpers, FSR 4 shader rewrites, `fsr4cap` (FSR 4 DLL model recording/extraction) |
 | `tests/` | Loader, runtime, patch and renderer tests |
 | `docs/` | Design notes and measurements ([upscaler](docs/upscaler.md), [parallel GPU](docs/parallel_gpu.md), [motion vectors](docs/motion_vectors.md), [roadmap](docs/ROADMAP.md)) |
 

@@ -4,7 +4,7 @@
 // and, with --stats, the driver's statistics of every pass (BB_FSR4_STATS).
 //
 //   fsr4-bench [render WxH] [output WxH] [preset 0-5; 5=DRS] [frames] [--stats] [--fsr411]
-// --fsr411: FSR 4.1.1 replay (fsr411.cpp, assets in BB_FSR411_DIR or fsr4_411) instead of v07;
+// --fsr411: the FSR 4 DLL model replay (fsr411.cpp, assets in BB_FSR4_DLL_DIR or fsr4_dll) instead of v07;
 // its frames match tools/fsr4cap (jitter phase, reset on the first frame).
 //   defaults: 2260x1272 3840x2160 2 (balanced) 900
 // BENCH_NOISE=1: pseudo-random inputs (a fixed seed); BENCH_DUMP=<file>: the output after the
@@ -497,9 +497,10 @@ int main(int argc, char** argv) {
     double gpu_ms = 0.0;
     float period_ns = 1.0f;
     if (fsr411) {
-        const char* dir411 = std::getenv("BB_FSR411_DIR");
+        const char* dir411 = std::getenv("BB_FSR4_DLL_DIR");
+        if (!dir411 || !dir411[0]) dir411 = std::getenv("BB_FSR411_DIR");
         upscaler411 = std::make_unique<Fsr411::Upscaler>(gpu.physical, gpu.device,
-                                                         dir411 && dir411[0] ? dir411 : "fsr4_411");
+                                                         dir411 && dir411[0] ? dir411 : "fsr4_dll");
         VkQueryPoolCreateInfo qci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
         qci.queryType = VK_QUERY_TYPE_TIMESTAMP;
         qci.queryCount = 2;

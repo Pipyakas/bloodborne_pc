@@ -6,7 +6,7 @@
 set -euo pipefail
 R=$(realpath "$1")
 export WINEPREFIX=$R/pfx GAMEID=umu-fsr4cap WINEDEBUG=-all
-export PROTONPATH=${PROTONPATH:-$(ls -d "$HOME"/.local/share/Steam/compatibilitytools.d/GE-Proton* | tail -1)}
+export PROTONPATH=${PROTONPATH:-$(ls -d "$HOME"/.local/share/Steam/compatibilitytools.d/{GE-Proton,Proton-GE}* 2>/dev/null | tail -1)}
 record() { # record <render WxH> <output WxH>
     rm -rf "$R/capture_$1_$2"
     umu-run "$R/fsr4cap.exe" 4.1.1 "$1" "$2" 3 > "$R/umu.log" 2>&1 || true

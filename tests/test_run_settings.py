@@ -13,7 +13,8 @@ import unittest
 
 class RestartResolutionTests(unittest.TestCase):
     def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False,
-                     persistent_assets=False, packaged_assets=False, fsr4_override=None):
+                     persistent_assets=False, packaged_assets=False, fsr4_override=None,
+                     dll_folder='fsr4_dll'):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory)
             root = ROOT
@@ -23,7 +24,7 @@ class RestartResolutionTests(unittest.TestCase):
                 shutil.copy2(ROOT / 'run.sh', root / 'run.sh')
                 for folder in ('scripts', 'patches'):
                     shutil.copytree(ROOT / folder, root / folder)
-                for folder in ('fsr4_shaders', 'fsr4_411'):
+                for folder in ('fsr4_shaders', dll_folder):
                     (data / folder).mkdir()
                     if packaged_assets:
                         (root / folder).mkdir()
@@ -57,7 +58,7 @@ class RestartResolutionTests(unittest.TestCase):
                 'stage=int(os.environ.get("BB_TEST_STAGE", "0"))\n'
                 'with (config.parent/"environments").open("a") as f:\n'
                 '    f.write(json.dumps({key:os.environ.get(key) for key in '
-                 '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES", "BB_FSR4_DIR", "BB_FSR411_DIR")})+"\\n")\n'
+                 '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES", "BB_FSR4_DIR", "BB_FSR4_DLL_DIR")})+"\\n")\n'
                 'if stage<2:\n'
                 '    config.write_text("upscaler=fsr3\\npreset=4\\noutput_res="+'
                 '("1280x720" if stage==0 else "1920x1080")+"\\n")\n'
@@ -71,6 +72,7 @@ class RestartResolutionTests(unittest.TestCase):
             env.pop('BB_LIVE_RES', None)
             env.pop('BB_FSR4_DIR', None)
             env.pop('BB_FSR411_DIR', None)
+            env.pop('BB_FSR4_DLL_DIR', None)
             if fsr4_override is not None:
                 env['BB_FSR4_DIR'] = fsr4_override
             if explicit:
@@ -126,9 +128,13 @@ class RestartResolutionTests(unittest.TestCase):
 
     def test_persistent_upscaler_assets_survive_restarts(self):
         rows = self.run_restarts(persistent_assets=True)
-        for key, folder in (('BB_FSR4_DIR', 'fsr4_shaders'), ('BB_FSR411_DIR', 'fsr4_411')):
+        for key, folder in (('BB_FSR4_DIR', 'fsr4_shaders'), ('BB_FSR4_DLL_DIR', 'fsr4_dll')):
             self.assertTrue(all(Path(row[key]).name == folder for row in rows))
             self.assertEqual(len({row[key] for row in rows}), 1)
+
+    def test_dll_model_assets_in_the_folder_before_fsr4_model(self):
+        rows = self.run_restarts(persistent_assets=True, dll_folder='fsr4_411')
+        self.assertTrue(all(Path(row['BB_FSR4_DLL_DIR']).name == 'fsr4_411' for row in rows))
 
     def test_packaged_assets_and_explicit_override_take_precedence(self):
         rows = self.run_restarts(persistent_assets=True, packaged_assets=True)

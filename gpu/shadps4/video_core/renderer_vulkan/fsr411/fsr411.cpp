@@ -28,6 +28,8 @@ constexpr const char* kPasses[] = {
     "pass11_post", "pass12",      "pass12_post", "postpass",    "rcas",
 };
 constexpr uint32_t kPassCount = sizeof(kPasses) / sizeof(kPasses[0]);
+/// The pass layout this replay implements (tools/fsr4cap/manifest.py LAYOUT).
+constexpr const char* kLayout = "fsr4cap-1";
 /// Tensor level (1/2^level of the aligned output) a model pass runs at, and of its _post pass.
 constexpr uint32_t kRunLevel[13] = {1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 2, 2, 1};
 constexpr uint32_t kPostLevel[13] = {1, 1, 1, 2, 2, 2, 3, 3, 3, 2, 2, 1, 1};
@@ -65,6 +67,20 @@ bool ReadFile(const std::string& path, std::vector<uint8_t>& data) {
     data.resize(size_t(file.tellg()));
     file.seekg(0);
     return bool(file.read(reinterpret_cast<char*>(data.data()), std::streamsize(data.size())));
+}
+
+/// A string field of manifest.json ("key": "value"); empty when absent or null.
+std::string ManifestField(const std::string& text, const std::string& key) {
+    size_t at = text.find("\"" + key + "\"");
+    if (at == std::string::npos || (at = text.find(':', at)) == std::string::npos) {
+        return {};
+    }
+    const size_t open = text.find_first_not_of(" \t\r\n", at + 1);
+    if (open == std::string::npos || text[open] != '"') {
+        return {};
+    }
+    const size_t close = text.find('"', open + 1);
+    return close == std::string::npos ? std::string{} : text.substr(open + 1, close - open - 1);
 }
 
 // ---- SPIR-V reflection ------------------------------------------------------------------------
@@ -246,8 +262,23 @@ struct Upscaler::Impl {
     std::array<double, kPassCount> profile_ms{};
     uint64_t profile_frames = 0;
 
+    // manifest.json (tools/fsr4cap/manifest.py): the source DLL's version and the pass layout.
+    // Sets built before manifests have none: accepted, version unknown.
+    std::string version, layout_error;
+
     Impl(VkPhysicalDevice p, VkDevice d, std::string dir_)
         : physical{p}, device{d}, dir{std::move(dir_)} {
+        std::vector<uint8_t> manifest;
+        if (ReadFile(dir + "/manifest.json", manifest)) {
+            const std::string text(manifest.begin(), manifest.end());
+            version = ManifestField(text, "upscaler_version");
+            const std::string layout = ManifestField(text, "layout");
+            if (layout != kLayout) {
+                layout_error = "asset layout '" + layout + "' (DLL " + version +
+                               ") is not the one this build replays (" + kLayout +
+                               "); rebuild them with this version's tools/fsr4cap";
+            }
+        }
         vkGetPhysicalDeviceMemoryProperties(physical, &memory);
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(physical, &props);
@@ -421,7 +452,7 @@ struct Upscaler::Impl {
         std::vector<uint8_t> bytes;
         const std::string path = dir + "/" + set + "/" + kPasses[index] + ".spv";
         if (!ReadFile(path, bytes) || bytes.size() % 4) {
-            error = "missing " + path + " (tools/fsr4cap: capture and extract the FSR 4.1.1 assets)";
+            error = "missing " + path + " (tools/fsr4cap/build_assets.sh builds them from your AMD DLL)";
             return false;
         }
         std::vector<uint32_t> words(bytes.size() / 4);
@@ -571,6 +602,10 @@ struct Upscaler::Impl {
 
     bool Record(const Frame& f) {
         error.clear();
+        if (!layout_error.empty()) {
+            error = layout_error;
+            return false;
+        }
         const uint32_t ow = f.output.width, oh = f.output.height;
         const uint32_t rw = f.render_width, rh = f.render_height;
         if (!ow || !oh || !rw || !rh || rw > ow || rh > oh || ow > 3840 || oh > 2160) {
@@ -776,6 +811,10 @@ bool Upscaler::Record(const Frame& frame) {
 
 const std::string& Upscaler::Error() const noexcept {
     return impl->error;
+}
+
+const std::string& Upscaler::Version() const noexcept {
+    return impl->version;
 }
 
 std::string Upscaler::Describe() const {

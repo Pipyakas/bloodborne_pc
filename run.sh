@@ -23,9 +23,12 @@ export BB_CONFIG=${BB_CONFIG:-$data/bbport.ini}
 if [[ -z ${BB_FSR4_DIR:-} && ! -d fsr4_shaders && -d $data/fsr4_shaders ]]; then
     export BB_FSR4_DIR=$data/fsr4_shaders
 fi
-# FSR 4.1.1 assets (tools/fsr4cap/build_assets.sh): next to run.sh or in the data directory.
-if [[ -z ${BB_FSR411_DIR:-} && ! -d fsr4_411 && -d $data/fsr4_411 ]]; then
-    export BB_FSR411_DIR=$data/fsr4_411
+# FSR 4 DLL model assets (tools/fsr4cap/build_assets.sh): next to run.sh or in the data
+# directory; fsr4_dll, or fsr4_411 (BB_FSR411_DIR) as before fsr4_model.
+if [[ -z ${BB_FSR4_DLL_DIR:-} && -z ${BB_FSR411_DIR:-} && ! -d fsr4_dll && ! -d fsr4_411 ]]; then
+    for folder in fsr4_dll fsr4_411; do
+        if [[ -d $data/$folder ]]; then export BB_FSR4_DLL_DIR=$data/$folder; break; fi
+    done
 fi
 if [[ -z ${BB_PREBUILT:-} && -z ${BB_IN_NIX_SHELL:-} ]] && ! { command -v pkg-config >/dev/null && pkg-config --exists vulkan sdl3; } && command -v nix-shell >/dev/null; then
     args=''; if (( $# )); then args=$(printf '%q ' "$@"); fi

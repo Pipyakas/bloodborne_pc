@@ -9,13 +9,17 @@
 
 namespace BbSettings {
 
-enum Upscaler : int { UpscalerOff = 0, UpscalerFsr3 = 1, UpscalerFsr4 = 2, UpscalerFsr411 = 3,
-                      UpscalerTaa = 4, UpscalerDlss = 5, UpscalerCount };
-/// FSR 4 v07 or FSR 4.1.1: the same inputs, settings and placement in the frame.
+enum Upscaler : int { UpscalerOff = 0, UpscalerFsr3 = 1, UpscalerFsr4 = 2, UpscalerTaa = 3,
+                      UpscalerDlss = 4, UpscalerCount };
 inline bool IsFsr4(int upscaler) {
-    return upscaler == UpscalerFsr4 || upscaler == UpscalerFsr411;
+    return upscaler == UpscalerFsr4;
 }
-/// FSR 4, FSR 4.1.1 or DLSS: one frame's inputs to a separate upscaler, which writes the
+/// The FSR 4 model: the one recorded from the user's AMD upscaler DLL (tools/fsr4cap, the
+/// replay in fsr411/), or v07 from the FidelityFX SDK sources (bundled). Auto prefers the DLL
+/// model where its assets and device features are present.
+enum Fsr4Model : int { Fsr4ModelAuto = 0, Fsr4ModelDll, Fsr4ModelSdk, Fsr4ModelCount };
+const char* Fsr4ModelName(int model); ///< bbport.ini fsr4_model: auto, dll, sdk
+/// FSR 4 or DLSS: one frame's inputs to a separate upscaler, which writes the
 /// output image (TemporalUpscaler::RecordFsr4); FSR 3.1 and TAA are recorded in place.
 inline bool IsFrameUpscaler(int upscaler) {
     return IsFsr4(upscaler) || upscaler == UpscalerDlss;
@@ -107,6 +111,12 @@ struct Values {
     // FSR 4 checks (menu): the provider's auto exposure, the jitter sign it is given.
     std::atomic<bool> fsr4_auto_exposure{true};
     std::atomic<bool> fsr4_invert_jitter{false};
+    std::atomic<int> fsr4_model{Fsr4ModelAuto};
+    /// Set by the renderer: the FSR 4 model that ran last (Fsr4ModelDll or Fsr4ModelSdk, 0
+    /// before the first FSR 4 frame), and the DLL model's version from its manifest (null:
+    /// not loaded, "" when the asset set predates manifests).
+    std::atomic<int> fsr4_model_active{0};
+    std::atomic<const char*> fsr4_dll_version{nullptr};
     std::atomic<int> active_render_width{1920}, active_render_height{1080};
     /// The temporal upscaler ran on the last frame (menus and loading screens skip it).
     std::atomic<bool> upscaler_ran{false};
@@ -155,7 +165,8 @@ struct Values {
     std::atomic<bool> window_focused{true};
     /// Why FSR 4 cannot run (assets, device features), or null. Set by the renderer.
     std::atomic<const char*> fsr4_problem{nullptr};
-    std::atomic<bool> fsr4_supported{false}, fsr411_supported{false}, dlss_supported{false};
+    /// fsr4_dll_supported: the DLL model's device features (VK_VALVE_shader_mixed_float_dot_product).
+    std::atomic<bool> fsr4_supported{false}, fsr4_dll_supported{false}, dlss_supported{false};
     /// NGX preset of the DLSS feature in use (Auto resolved), 0 before the first DLSS frame.
     std::atomic<int> dlss_active_preset{0};
     /// Frame generation state for the menu: set up at start, generating now, why not (or null).
@@ -181,7 +192,7 @@ Values& Get();
 /// Reads the file, then the environment overrides. Called once at start.
 void Load();
 /// Checks the loaded choice before the first frame; unsupported FSR 4 or DLSS uses FSR 3.1.
-void ConfigureUpscalerSupport(bool fsr4, bool fsr411, bool dlss);
+void ConfigureUpscalerSupport(bool fsr4, bool fsr4_dll, bool dlss);
 /// Startup-patched scene dimensions cannot change until run.sh prepares a new image.
 bool FixedRenderSession();
 int RenderPreset();

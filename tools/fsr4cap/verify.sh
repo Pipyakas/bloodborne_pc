@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/fsr4cap/verify.sh <fsr4cap dir> [frames]: runs AMD's FSR 4.1.1 DLL (fsr4cap.exe under
-# umu-run) and the Vulkan replay (out/gpu/fsr4-bench --fsr411, assets in fsr4_411) on the same
+# umu-run) and the Vulkan replay (out/gpu/fsr4-bench --fsr411, assets in fsr4_dll or BB_FSR4_DLL_DIR) on the same
 # pseudo-random inputs for several sizes and both models, and compares the outputs byte by byte.
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."

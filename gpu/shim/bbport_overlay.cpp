@@ -334,6 +334,18 @@ void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
     Store(value, v, changed);
 }
 
+/// "FSR 4" with the model that ran: the DLL's version from its manifest, or v07.
+const char* Fsr4Label() {
+    static char label[64];
+    const auto& s = BbSettings::Get();
+    const char* version = s.fsr4_dll_version.load();
+    if (s.fsr4_model_active != BbSettings::Fsr4ModelDll) {
+        return s.fsr4_model_active == BbSettings::Fsr4ModelSdk ? "FSR 4 v07" : "FSR 4";
+    }
+    std::snprintf(label, sizeof(label), "FSR 4 %s", version && version[0] ? version : "(DLL)");
+    return label;
+}
+
 void Hint(const char* text) {
     ImGui::SameLine();
     ImGui::PushID(text);
@@ -382,7 +394,7 @@ void Menu() {
                        "Right stick: scroll    L1 / R1: slow / fast adjustment    L3+R3: close");
 
     ImGui::SeparatorText("Temporal upscaler");
-    static const char* upscalers[] = {"Off", "FSR 3.1", "FSR 4 (INT8)", "FSR 4.1.1 (INT8)",
+    static const char* upscalers[] = {"Off", "FSR 3.1", "FSR 4 (INT8)",
                                      "TAA (native anti-aliasing)", "DLSS (NVIDIA)"};
     static const char* later[] = {"XeSS"};
     int upscaler = s.upscaler;
@@ -394,7 +406,6 @@ void Menu() {
     if (upscaler_open) {
         for (int i = 0; i < BbSettings::UpscalerCount; ++i) {
             const bool supported = i == BbSettings::UpscalerFsr4 ? s.fsr4_supported.load()
-                : i == BbSettings::UpscalerFsr411 ? s.fsr411_supported.load()
                 : i == BbSettings::UpscalerDlss ? s.dlss_supported.load() : true;
             ImGui::BeginDisabled(!supported);
             if (ImGui::Selectable(upscalers[i], i == upscaler)) {
@@ -417,21 +428,50 @@ void Menu() {
     }
     if (const char* problem = s.fsr4_problem.load()) {
         ImGui::PushTextWrapPos();
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "Upscaler unavailable: %s", problem);
+        // FSR 4 running on v07 with a note: only the chosen DLL model is unavailable.
+        const bool model_note = BbSettings::IsFsr4(s.upscaler) &&
+                                s.fsr4_model_active == BbSettings::Fsr4ModelSdk;
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "%s: %s",
+                           model_note ? "AMD DLL model not used" : "Upscaler unavailable", problem);
         if (!BbSettings::IsFsr4(s.upscaler))
             ImGui::TextUnformatted("The mode selected above is active. You can select it again to retry.");
         ImGui::PopTextWrapPos();
     }
     if (BbSettings::IsFsr4(s.upscaler)) {
-        if (s.upscaler == BbSettings::UpscalerFsr411) {
-            Hint("FSR 4.1.1 in INT8 mode: the model from AMD's 4.1.1 DLL, replayed on Vulkan "
-                 "(output matches the DLL). One model for Native..Performance and a separate one "
-                 "for Ultra Performance. Assets: tools/fsr4cap/build_assets.sh (needs the DLLs and Proton).");
-        } else {
-            Hint("FSR 4 in INT8 mode (model v07 from AMD FidelityFX SDK sources). Better quality "
-                 "than FSR 3.1, but a heavier pass. Changing the preset rebuilds the model (a short "
-                 "pause). Assets: tools/fetch_fsr4_assets.sh.");
+        // The DLL model's label comes from its assets' manifest (the DLL it was recorded from).
+        const char* version = s.fsr4_dll_version.load();
+        char dll_label[96];
+        std::snprintf(dll_label, sizeof(dll_label), "AMD DLL model%s%s%s",
+                      version && version[0] ? " (" : "", version && version[0] ? version : "",
+                      version && version[0] ? ")" : "");
+        const char* models[] = {"Auto (DLL model if installed)", dll_label, "SDK v07 (bundled)"};
+        int model = s.fsr4_model;
+        if (ImGui::BeginCombo("FSR 4 model", models[model])) {
+            for (int i = 0; i < BbSettings::Fsr4ModelCount; ++i) {
+                const bool supported = i != BbSettings::Fsr4ModelDll || s.fsr4_dll_supported.load();
+                ImGui::BeginDisabled(!supported);
+                if (ImGui::Selectable(models[i], i == model)) {
+                    Store(s.fsr4_model, i, true);
+                }
+                ImGui::EndDisabled();
+                if (!supported) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("— not supported by this GPU");
+                }
+            }
+            ImGui::EndCombo();
         }
+        const int active = s.fsr4_model_active;
+        if (active == BbSettings::Fsr4ModelDll) {
+            ImGui::Text("In use: %s", dll_label);
+        } else if (active == BbSettings::Fsr4ModelSdk) {
+            ImGui::TextUnformatted("In use: SDK v07");
+        }
+        Hint("The DLL model is the network of your AMD upscaler DLL (amd_fidelityfx_upscaler_dx12, "
+             "e.g. from a game or OptiScaler), recorded once and replayed on Vulkan with output "
+             "matching the DLL; build it with tools/fsr4cap/build_assets.sh. Its version is the "
+             "DLL's. The SDK v07 model comes from AMD's FidelityFX SDK sources and is bundled. "
+             "Auto uses the DLL model where its assets and GPU features are present.");
         Checkbox("FSR 4: auto exposure", s.fsr4_auto_exposure);
         Checkbox("FSR 4: invert jitter sign", s.fsr4_invert_jitter);
         Hint("For ghosting checks: the FSR 4 network normalizes color by exposure and uses it "
@@ -767,8 +807,7 @@ void FpsCounter() {
     ImGui::Text("%.0f FPS  %.1f ms  %s%s", fps, frame_ms_avg,
                 !s.upscaler_ran                          ? ""
                 : s.upscaler == BbSettings::UpscalerFsr3   ? "FSR 3.1"
-                : s.upscaler == BbSettings::UpscalerFsr4 ? "FSR 4"
-                : s.upscaler == BbSettings::UpscalerFsr411 ? "FSR 4.1.1"
+                : s.upscaler == BbSettings::UpscalerFsr4 ? Fsr4Label()
                 : s.upscaler == BbSettings::UpscalerTaa ? "TAA"
                 : s.upscaler == BbSettings::UpscalerDlss ? "DLSS"
                                                          : "",

@@ -284,8 +284,9 @@ public:
                features.shaderStorageImageExtendedFormats;
     }
 
-    /// bbport: FSR 4.1.1 (INT8 model passes and VK_VALVE_shader_mixed_float_dot_product).
-    bool IsFsr411Supported() const {
+    /// bbport: the FSR 4 DLL model replay (INT8 model passes and
+    /// VK_VALVE_shader_mixed_float_dot_product).
+    bool IsFsr4DllSupported() const {
         return IsFsr4Int8Supported() && mixed_float_dot_product;
     }
 

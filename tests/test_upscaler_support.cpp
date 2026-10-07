@@ -15,6 +15,7 @@ int main() {
     close(fd);
     setenv("BB_CONFIG", path, 1);
     unsetenv("BB_UPSCALER");
+    unsetenv("BB_FSR4_MODEL");
     unsetenv("BB_UPSCALE_PRESET");
     unsetenv("BB_RENDER_RES");
     auto& s = Get();
@@ -29,7 +30,7 @@ int main() {
     s.upscaler = UpscalerFsr3;
     assert(RenderPreset() == Performance);
     for (bool fsr4 : {false, true}) {
-        for (bool fsr411 : {false, true}) {
+        for (bool dlss : {false, true}) {
             for (int requested = 0; requested < UpscalerCount; ++requested) {
                 FILE* config = std::fopen(path, "w");
                 assert(config);
@@ -39,20 +40,51 @@ int main() {
                 s.fsr4_problem = nullptr;
                 Load();
                 assert(s.upscaler == requested);
-                ConfigureUpscalerSupport(fsr4, fsr411);
+                ConfigureUpscalerSupport(fsr4, true, dlss);
                 const bool unsupported = (requested == UpscalerFsr4 && !fsr4) ||
-                    (requested == UpscalerFsr411 && !(fsr4 && fsr411));
+                                         (requested == UpscalerDlss && !dlss);
                 assert(s.upscaler == (unsupported ? UpscalerFsr3 : requested));
-                assert(s.fsr4_supported == fsr4);
-                assert(s.fsr411_supported == (fsr4 && fsr411));
+                assert(s.fsr4_supported == fsr4 && s.fsr4_dll_supported == fsr4);
                 assert(bool(s.fsr4_problem.load()) == unsupported);
                 assert(s.preset == Performance && s.output_res == 2);
                 // Startup patch settings still describe the already applied guest patches.
                 assert(s.startup_upscaler == requested);
-                ConfigureUpscalerSupport(fsr4, fsr411);
+                ConfigureUpscalerSupport(fsr4, true, dlss);
                 assert(s.upscaler == (unsupported ? UpscalerFsr3 : requested));
             }
         }
+    }
+    // The model is a setting of FSR 4: saved, and the DLL model's missing features are no
+    // reason to leave FSR 4 (v07 runs instead).
+    for (int model = 0; model < Fsr4ModelCount; ++model) {
+        s.upscaler = UpscalerFsr4;
+        s.fsr4_model = model;
+        Save();
+        s.fsr4_model = -1;
+        Load();
+        assert(s.upscaler == UpscalerFsr4 && s.fsr4_model == model);
+        s.fsr4_problem = nullptr;
+        ConfigureUpscalerSupport(true, false, false);
+        assert(s.upscaler == UpscalerFsr4 && !s.fsr4_dll_supported && !s.fsr4_problem.load());
+    }
+    // Settings from before fsr4_model: upscaler=fsr411 was the DLL model.
+    {
+        FILE* config = std::fopen(path, "w");
+        assert(config);
+        std::fputs("upscaler=fsr411\npreset=3\n", config);
+        std::fclose(config);
+        s.fsr4_model = Fsr4ModelAuto;
+        Load();
+        assert(s.upscaler == UpscalerFsr4 && s.fsr4_model == Fsr4ModelDll);
+        setenv("BB_UPSCALER", "fsr411", 1);
+        s.fsr4_model = Fsr4ModelSdk;
+        Load();
+        assert(s.upscaler == UpscalerFsr4 && s.fsr4_model == Fsr4ModelDll);
+        setenv("BB_FSR4_MODEL", "sdk", 1);
+        Load();
+        assert(s.fsr4_model == Fsr4ModelSdk);
+        unsetenv("BB_UPSCALER");
+        unsetenv("BB_FSR4_MODEL");
     }
     s.startup_preset = Quality;
     s.startup_upscaler = UpscalerFsr3;

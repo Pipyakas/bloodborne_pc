@@ -89,8 +89,13 @@ def main():
     config = Path(os.environ['BB_CONFIG'])
     if 'BB_FSR4_DIR' not in os.environ and not (ROOT / 'fsr4_shaders').is_dir() and (data / 'fsr4_shaders').is_dir():
         os.environ['BB_FSR4_DIR'] = str(data / 'fsr4_shaders')
-    if 'BB_FSR411_DIR' not in os.environ and not (ROOT / 'fsr4_411').is_dir() and (data / 'fsr4_411').is_dir():
-        os.environ['BB_FSR411_DIR'] = str(data / 'fsr4_411')
+    # FSR 4 DLL model assets: fsr4_dll, or fsr4_411 as before fsr4_model (run.sh does the same).
+    if not {'BB_FSR4_DLL_DIR', 'BB_FSR411_DIR'} & os.environ.keys() and \
+            not any((ROOT / f).is_dir() for f in ('fsr4_dll', 'fsr4_411')):
+        for folder in ('fsr4_dll', 'fsr4_411'):
+            if (data / folder).is_dir():
+                os.environ['BB_FSR4_DLL_DIR'] = str(data / folder)
+                break
     # The last folder that worked is remembered, so run.bat alone starts the game afterwards.
     remembered = out / 'game_dir.txt'
     chosen = bool(game)  # given explicitly: an error rather than the first-launch screen

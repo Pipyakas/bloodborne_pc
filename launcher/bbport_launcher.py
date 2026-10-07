@@ -13,7 +13,7 @@ import os
 import signal
 import sys
 from pathlib import Path
-from bbport_assets import fsr411_problem
+from bbport_assets import dll_model_dir, dll_model_problem, dll_model_version
 from bbport_i18n import language, set_language, tr
 
 import gi
@@ -35,8 +35,11 @@ MAX_LOG_LINES = 5000
 
 # Choices: (label, value). The first entry is the default. Labels are translated when shown.
 UI_LANGUAGES = [("Как в системе", ""), ("Русский", "ru"), ("English", "en")]
-UPSCALERS = [("FSR 4", "fsr4"), ("FSR 4.1.1", "fsr411"), ("FSR 3", "fsr3"),
+UPSCALERS = [("FSR 4", "fsr4"), ("FSR 3", "fsr3"),
              ("TAA (нативное сглаживание)", "taa"), ("Выключен", "off")]
+# The FSR 4 network: from the user's AMD DLL (tools/fsr4cap) or the bundled SDK v07.
+FSR4_MODELS = [("Авто (модель DLL, если установлена)", "auto"), ("Модель из DLL AMD", "dll"),
+               ("SDK v07 (в комплекте)", "sdk")]
 PRESETS = [("Native AA", 0), ("Quality (x1.5)", 1), ("Balanced (x1.7)", 2),
            ("Performance (x2)", 3), ("Ultra Performance (x3)", 4)]
 OUTPUT_RES = [("1280×720 (Steam Deck)", "1280x720"), ("1920×1080", "1920x1080"), ("2560×1440", "2560x1440"), ("3840×2160", "3840x2160")]
@@ -90,6 +93,7 @@ DEFAULTS = {
 # bbport.ini keys the launcher edits; the rest of the file is kept.
 INI_DEFAULTS = {
     "upscaler": "fsr4",
+    "fsr4_model": "auto",
     "preset": "4",
     "sharpen": "1",
     "sharpness": "0.50",
@@ -131,6 +135,11 @@ def load_ini():
         if "=" in line and not line.lstrip().startswith("#"):
             key, value = line.split("=", 1)
             values[key.strip()] = value.strip()
+    # Before fsr4_model, upscaler=fsr411 was the DLL model.
+    if values["upscaler"] == "fsr411":
+        values["upscaler"] = "fsr4"
+        if not any(line.split("=", 1)[0].strip() == "fsr4_model" for line in lines if "=" in line):
+            values["fsr4_model"] = "dll"
     return values, lines
 
 
@@ -391,6 +400,9 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.upscaler_row = combo_row(tr("Апскейлер"), None, UPSCALERS, self.ini["upscaler"])
         self.upscaler_row.connect("notify::selected", lambda *_: self.update_upscaler_status())
         upscaler.add(self.upscaler_row)
+        self.fsr4_model_row = combo_row(tr("Модель FSR 4"), None, FSR4_MODELS, self.ini["fsr4_model"])
+        self.fsr4_model_row.connect("notify::selected", lambda *_: self.update_upscaler_status())
+        upscaler.add(self.fsr4_model_row)
         self.preset_row = combo_row(tr("Пресет"), None, PRESETS, int(self.ini.get("preset", "4")))
         self.preset_row.connect("notify::selected", lambda *_: self.update_upscaler_status())
         self.output_row.connect("notify::selected", lambda *_: self.update_upscaler_status())
@@ -534,20 +546,31 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.update_user_status()
         self.store()
 
+    def fsr4_model_hint(self):
+        """Which FSR 4 network the game will use for the selected output and preset, and why."""
+        choice = combo_value(self.fsr4_model_row)
+        sdk = (tr("SDK v07: ассеты найдены") if (PORT_DIR / "fsr4_shaders").is_dir()
+               else tr("SDK v07: нет ассетов, tools/fetch_fsr4_assets.sh"))
+        if choice == "sdk":
+            return sdk
+        directory = dll_model_dir(PORT_DIR, DATA_DIR)
+        problem = dll_model_problem(directory, combo_value(self.output_row),
+                                    int(combo_value(self.preset_row)))
+        if problem is None:
+            version = dll_model_version(directory) or tr("версия неизвестна")
+            return tr("Модель из DLL AMD {}").format(version)
+        if choice == "dll":
+            return tr("{}. Соберите ассеты: tools/fsr4cap/build_assets.sh ({}); до тех пор {}").format(
+                problem, directory, sdk)
+        return sdk
+
     def update_upscaler_status(self):
         value = combo_value(self.upscaler_row)
         if value == "fsr4":
-            ok = (PORT_DIR / "fsr4_shaders").is_dir()
-            hint = tr("Ассеты найдены") if ok else tr("Нет ассетов: tools/fetch_fsr4_assets.sh")
-        elif value == "fsr411":
-            directory = Path(os.environ["BB_FSR411_DIR"]) if os.environ.get("BB_FSR411_DIR") else (
-                PORT_DIR / "fsr4_411" if (PORT_DIR / "fsr4_411").is_dir() else DATA_DIR / "fsr4_411")
-            problem = fsr411_problem(directory, combo_value(self.output_row),
-                                     int(combo_value(self.preset_row)))
-            hint = tr("Ассеты для выбранного режима найдены") if not problem else (
-                tr("{}. Установите полный набор fsr4_411 в {}.").format(problem, directory))
+            hint = self.fsr4_model_hint()
         else:
             hint = tr("Сглаживание в разрешении вывода без модели FSR") if value == "taa" else None
+        self.fsr4_model_row.set_visible(value == "fsr4")
         self.preset_row.set_sensitive(value not in ("taa", "off"))
         self.sharpen_row.set_sensitive(value != "off")
         self.sharpness_row.set_sensitive(value != "off")
@@ -589,6 +612,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         save_settings(s)
         self.ini.update({
             "upscaler": combo_value(self.upscaler_row),
+            "fsr4_model": combo_value(self.fsr4_model_row),
             "preset": str(combo_value(self.preset_row)),
             "sharpen": "1" if self.sharpen_row.get_active() else "0",
             "sharpness": f"{self.sharpness_row.get_value():.2f}",

@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # tools/fsr4cap/build_assets.sh <amd_fidelityfx_upscaler_dx12.dll 4.1.x> <amd_fidelityfx_loader_dx12.dll 2.3.x>
 #
-# Builds the FSR 4.1.1 asset set (fsr4_411/: SPIR-V of every pass, model weights) from AMD's
-# upscaler DLL, for upscaler=fsr411 (gpu/.../fsr411). Nothing of AMD's is downloaded or
-# shipped: the DLLs are the user's own (OptiScaler ships them, many games do).
+# Builds the FSR 4 DLL model asset set (fsr4_dll/: SPIR-V of every pass, model weights,
+# manifest.json naming the DLL's version) from AMD's upscaler DLL, for fsr4_model=dll/auto
+# (gpu/.../fsr411). Nothing of AMD's is downloaded or shipped: the DLLs are the user's own
+# (OptiScaler ships them, many games do; 4.1.1.2740 and 4.1.1.3529 give identical assets).
 #   1. builds dxil-spirv (pinned commit + dxil-spirv-class-bindings.patch) and fsr4cap.exe (MinGW);
 #   2. runs fsr4cap.exe under umu-run (Proton, vkd3d-proton): every output size class and quality
 #      ratio, recording the D3D12 frames (capture_all.sh);
-#   3. extract.py translates them, checks the replay rules and writes fsr4_411/;
+#   3. extract.py translates them, checks the replay rules and writes fsr4_dll/; manifest.py
+#      records the DLL's version after checking that the weights are the DLL's;
 #   4. with VERIFY=1, verify.sh compares the replay with the DLL byte by byte.
 # Needs nix-shell (or the tools on PATH: x86_64-w64-mingw32-gcc, cmake, ninja, python3,
 # spirv-dis/spirv-as, umu-run), network for the two git repositories, and a Proton build
@@ -52,10 +54,11 @@ cp "$upscaler" "$work/amd_fidelityfx_upscaler_dx12.dll"
 cp "$loader" "$work/amd_fidelityfx_loader_dx12.dll"
 
 bash tools/fsr4cap/capture_all.sh "$work"
-python3 tools/fsr4cap/extract.py "$dx/build/dxil-spirv" "$work" fsr4_411
+python3 tools/fsr4cap/extract.py "$dx/build/dxil-spirv" "$work" fsr4_dll
+python3 tools/fsr4cap/manifest.py fsr4_dll "$upscaler" "$loader"
 if [[ ${VERIFY:-0} == 1 ]]; then
     bash build.sh
     ninja -C out/gpu fsr4-bench >/dev/null
     bash tools/fsr4cap/verify.sh "$work"
 fi
-echo "FSR 4.1.1 assets in $PWD/fsr4_411 (bbport.ini: upscaler=fsr411)"
+echo "FSR 4 DLL model assets in $PWD/fsr4_dll (bbport.ini: upscaler=fsr4, fsr4_model=auto or dll)"

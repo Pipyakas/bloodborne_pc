@@ -170,7 +170,7 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
         dlss = std::make_unique<DlssUpscaler>(instance, scheduler);
     }
     BbSettings::ConfigureUpscalerSupport(instance.IsFsr4Int8Supported(),
-                                         instance.IsFsr411Supported(),
+                                         instance.IsFsr4DllSupported(),
                                          dlss && dlss->Available());
     fsr4 = std::make_unique<Fsr4Upscaler>(instance, scheduler);
     // Available unless BB_UPSCALER=none; on/off and the parameters are the menu's settings.
@@ -309,15 +309,19 @@ bool TemporalUpscaler::OnFrameStart() {
         failed = false;
         fsr4_failed = false;
     }
+    // A different FSR 4 model is a different provider, as an upscaler change.
+    const int fsr4_model = settings.fsr4_model.load();
+    const bool provider_changed = applied_upscaler != upscaler ||
+                                  (BbSettings::IsFsr4(upscaler) && applied_fsr4_model != fsr4_model);
     const bool changed = output_changed || applied_preset != preset || active != last_active ||
-                         jitter_on != last_jitter || applied_upscaler != upscaler;
-    if (applied_upscaler != upscaler) {
+                         jitter_on != last_jitter || provider_changed;
+    if (provider_changed) {
         // A failed provider keeps a fatal flag internally; a user retry gets a fresh context.
         scheduler.Finish();
         fsr4 = std::make_unique<Fsr4Upscaler>(instance, scheduler);
         if (BbSettings::IsFrameUpscaler(upscaler)) BbSettings::Get().fsr4_problem = nullptr;
     }
-    if (applied_upscaler != upscaler) fsr4_failed = false; // retry after a menu change
+    if (provider_changed) fsr4_failed = false; // retry after a menu change
     // Dynamic scene resolution scaling (live preset switching) works on all GPUs.
     // On GPUs without D32S8 blit support, UI depth is cleared instead of copied from scene.
     bool resized = false;
@@ -363,6 +367,7 @@ bool TemporalUpscaler::OnFrameStart() {
     applied_preset = preset;
     applied_output = output;
     applied_upscaler = upscaler;
+    applied_fsr4_model = fsr4_model;
     last_active = active;
     last_jitter = jitter_on;
     BbSettings::Get().upscaler_ran = dispatched_last_frame;
@@ -2224,10 +2229,7 @@ bool TemporalUpscaler::UseFsr4() const {
     if (selected == BbSettings::UpscalerDlss) {
         return dlss && dlss->Available() && !fsr4_failed;
     }
-    const bool supported = selected == BbSettings::UpscalerFsr411
-                               ? instance.IsFsr411Supported()
-                               : instance.IsFsr4Int8Supported();
-    return BbSettings::IsFsr4(selected) && supported && !fsr4_failed;
+    return BbSettings::IsFsr4(selected) && instance.IsFsr4Int8Supported() && !fsr4_failed;
 }
 
 void TemporalUpscaler::RecordFrameGen(vk::CommandBuffer cmdbuf, vk::Image depth,
