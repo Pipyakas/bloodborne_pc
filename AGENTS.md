@@ -73,11 +73,14 @@ Before reporting implementation work as finished:
 4. Build on d1: every new `master` commit is built for both Windows and Linux by the
    timer (started at once by the post-commit/post-merge hooks of
    `tools/cross/install-autobuild.sh`), or run `tools/cross/build-windows.sh master` and
-   `tools/cross/build-linux.sh master` yourself. d1's host has no build dependencies:
-   both builds run in containers. Check that `dist/windows/BUILD` and `dist/linux/BUILD`
+   `tools/cross/build-linux.sh master` yourself. Windows builds run in a container;
+   Linux uses the native SDK when present, otherwise its container fallback.
+   Check that `dist/windows/BUILD` and `dist/linux/BUILD`
    name your commit; if a build failed, `.cross/build.log` (Windows) or
    `.cross/linux-build.log` (Linux) says why and the previous build stays in `dist/`.
-   A commit that breaks either platform is not done.
+   A commit that breaks either platform is not done. On Bazzite-DX, Linux builds
+   use the native user SDK when installed (see `docs/LINUX_NATIVE.md`);
+   `dist/linux/BUILD_BACKEND` must say `native` for the KDE playable launcher.
 5. For runtime changes, smoke-test on the laptop: run `bbport-update.ps1` in
    `D:\bbport` (or start through the shortcut only with the user's permission),
    then `python\python.exe tools\mcp\bbport_mcp.py launch` there; stop your test
