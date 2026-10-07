@@ -97,6 +97,24 @@ steps with temporal history retained, not rare 1 % jumps. For bbport's visible D
 implication is that step size is not the main lever; history continuity across a resize is
 (bbport's TAA still resets its history on resize; FSR/DLSS keep it).
 
+The mod's ten profiles (v1.0, built on an older regulation; checked 2026-10-07) change only
+row 2, which identifies row 2 as the PC row. Row 2 (vanilla → mod):
+
+| field | vanilla | Relaxed (target T = 30/40/60/90/120) | Aggressive |
+|---|---|---|---|
+| lower = upper threshold | 30.6 / 31.6 | T (no hysteresis band) | 1.2 × T (20 % GPU headroom) |
+| frames below to step down | 5 | 1–2 | 1–2 |
+| frames above to step up | 20 | T (one second) | 1.2 × T (120 at T = 120) |
+| sleep after step down / up | 30 / 10 frames | 2–5 / T frames (one second) | 2–5 / ~1 s |
+| DRS range, enabling level | 70–100 %, 2 | 50–100 % (70 at 120), 2 | 25–100 %, 1 |
+| min change period | 8 | 8 (unchanged) | 8 |
+
+It also disables the effect cuts (levels set to 21 = never), so only resolution moves. The
+vanilla PC row barely uses DRS (30 FPS target only); the mod's rule of thumb is "react within
+1–2 frames, recover only after about a second of headroom". bbport already uses half-second
+measurements, one-point steps and slower recovery; the mod changes no step size or history
+handling, so it is no evidence about the visibility of individual steps.
+
 ## 4. TAA (confidence: low, open)
 
 - bbport's TAA: computed camera motion + replayed object motion, depth rejection, 3×3
