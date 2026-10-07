@@ -1,5 +1,6 @@
 /* Offline AppContent provider for the configured base-game profile.
  * No package/DLC mounting, downloads, entitlement or license emulation. */
+#define _GNU_SOURCE
 #include "runtime.h"
 #include <stdio.h>
 #include <stdlib.h>

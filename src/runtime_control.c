@@ -13,6 +13,7 @@
  *   text <utf8>                    confirms the open text entry (IME dialog) with the text
  *   set <key> <value>              applies one bbport.ini setting live, like the menus (not saved)
  *   quit                           ends the process */
+#define _GNU_SOURCE
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>

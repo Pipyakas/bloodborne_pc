@@ -1,4 +1,5 @@
 /* Narrow, explicit PS4 libc contracts. No automatic success stubs. */
+#define _GNU_SOURCE
 #define _CRT_RAND_S
 #include "runtime.h"
 #include "gpu/bbgpu.h"

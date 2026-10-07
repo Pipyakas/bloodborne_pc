@@ -26,6 +26,7 @@
  * object, a 0x20-byte inline buffer {vtable, capture, ...} followed by a pointer to the
  * active object. The add-row function copies the texts and clones the callback, so the
  * caller keeps (and destroys) its own. Steps are reference counted (count at +8). */
+#define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
 #include <stdio.h>

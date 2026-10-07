@@ -14,6 +14,7 @@
  *     get the current setting.
  * The startup patches still set the initial state; code bytes are only rewritten when they
  * match the original or the patched form exactly. */
+#define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
 #include <stdio.h>
