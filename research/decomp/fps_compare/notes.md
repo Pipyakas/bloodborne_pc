@@ -126,7 +126,11 @@ handling, so it is no evidence about the visibility of individual steps.
   it could replace part of the vertex-replay object motion.
 - Later games' TAA shaders were not extracted (encrypted archives); no claim about their
   algorithm is made. ERSS replaces Elden Ring's TAA with DLSS/FSR/XeSS using the game's own
-  motion vectors and depth; its source is not public.
+  motion vectors and depth; its source is not public. ERSS-FG v4.14.1 (checked statically
+  2026-10-07): a `d3d12.dll` proxy loads `ERSS-FG.dll`, whose code is packed (empty sections, one
+  encrypted 14.6 MB blob), so its hooks and resource choices cannot be read without running it.
+  It ships the stock DX12 SDKs (FidelityFX upscaler 4.0.3 and frame generation 4.0.0, DLSS-G
+  310.6, XeSS 1.3.1); nothing in it is reusable for bbport's Vulkan path.
 
 ## 5. Open work
 
