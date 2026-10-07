@@ -2,8 +2,9 @@
 
 ## Single playable branch (owner decision, 2026-10-06)
 
-- Use `master` in `C:\code\bloodborne_pc` for ongoing port work and the user's
-  testing. Do not ask the user to launch a separate task-worktree build.
+- Use `master` in d1's checkout `/var/mnt/ssd1/bloodborne_pc` for ongoing port work
+  (owner decision, 2026-10-07: all development and building happen on d1; the Windows
+  laptop only plays). Do not ask the user to launch a separate task-worktree build.
 - Do not create new task branches/worktrees for this port unless explicitly
   requested. Existing branches are historical; preserve them and their dirty
   work until their owners have reviewed/integrated it.
@@ -33,10 +34,13 @@
 
 ## Definition of done: update the playable master build
 
-The user tests the port through the **Bloodborne (bbport)** Start menu shortcut.
-It launches `C:\code\bloodborne_pc\Bloodborne.cmd`, which uses the prebuilt
-`C:\code\bloodborne_pc\out\bb-probe.exe`. A build in another worktree does **not**
-update that executable.
+The user tests the port on the Windows laptop through the **Bloodborne (bbport)**
+Start menu shortcut. It launches `C:\Games\bbport\Bloodborne.cmd`, which first pulls
+d1's latest Windows build (`tools/cross/bbport-update.ps1`) and then starts it. d1 makes
+that build from `master` automatically: the `bbport-wincross.timer` user timer runs
+`tools/cross/build-windows.sh --if-changed master` every 2 minutes and stages
+`dist/windows` (log: `.cross/build.log`). Never build on the laptop; `C:\code\bloodborne_pc`
+there is an old checkout, not the playable build.
 
 For completed implementation work, the user authorizes agents to commit their own
 changes, integrate them into `master`, rebuild the playable checkout, and push
@@ -46,11 +50,11 @@ remote URL before pushing; do not push to `upstream` or another owner's fork.
 Explicit task instructions (for example, review only, leave uncommitted, do not
 merge, or do not push) override this default.
 
-During development, the user authorizes agents to close the running playable master
-build before rebuilding/updating it, without asking again. Match the executable path
-`C:\code\bloodborne_pc\out\bb-probe.exe` exactly: request a graceful close first,
-then terminate that confirmed master instance if it does not exit. Do not stop games
-running from other worktrees or unrelated applications under this permission.
+During development, the user authorizes agents to close the running playable build
+before updating it, without asking again. Match the executable path
+`C:\Games\bbport\out\bb-probe.exe` exactly: request a graceful close first, then
+terminate that confirmed instance if it does not exit. Do not stop unrelated games or
+applications under this permission. (The updater itself skips updating while it runs.)
 
 Before reporting implementation work as finished:
 
@@ -64,25 +68,18 @@ Before reporting implementation work as finished:
    WIP commits. Prefer a fast-forward when possible; otherwise merge only a
    fully ready branch, or cherry-pick your isolated completed commits. Test any
    conflict resolution before proceeding.
-4. Update the playable checkout at `C:\code\bloodborne_pc` to the integrated
-   `master` revision, then build **there**, not just in your task worktree:
-
-   ```powershell
-   $env:MSYSTEM='CLANG64'
-   $env:CHERE_INVOKING='1'
-   & C:\msys64\usr\bin\bash.exe -lc 'bash build.sh'
-   if ($LASTEXITCODE -ne 0) { throw 'Master build failed' }
-   ```
-
-   Use that directory as the command's working directory. If MSYS2 is installed
-   elsewhere, use its configured path. On a non-Windows host, run `bash build.sh`
-   in the user's designated playable master checkout and explain that it does
-   not refresh this Windows executable.
-5. Verify the build succeeded and `out/bb-probe.exe` exists. For runtime changes,
-   smoke-test the integrated build through `tools/mcp/bbport_mcp.py` and stop your
-   test instance afterward. Minimized, silent launches are the default; do not
-   launch a foreground game, enable sound, or manipulate desktop focus without
-   the user's permission. Preserve the user's settings and saves.
+4. Build on d1: run `bash build.sh` in `/var/mnt/ssd1/bloodborne_pc` (native Linux
+   build and tests), and let the timer (or `tools/cross/build-windows.sh master`) make
+   the Windows build. Check that `dist/windows/BUILD` names your commit; if the
+   Windows build failed, `.cross/build.log` says why and `dist/windows` keeps the
+   previous build.
+5. For runtime changes, smoke-test on the laptop: run `bbport-update.ps1` in
+   `C:\Games\bbport` (or start through the shortcut only with the user's permission),
+   then `python\python.exe tools\mcp\bbport_mcp.py launch` there; stop your test
+   instance afterward. Minimized, silent launches are the default; do not launch a
+   foreground game, enable sound, or manipulate desktop focus without the user's
+   permission. Preserve the user's settings and saves (they live in `C:\Games\bbport`
+   and updates never delete them).
 6. Publish tested, integrated work with a normal, non-force push to
    `origin/master`. Fetch/check the current remote first; if it advanced,
    reconcile safely and rerun relevant tests/builds. Never force-push or rewrite
