@@ -27,4 +27,16 @@ int main() {
     assert(scale == 50);
     for (int i = 0; i < 20; ++i) scale = Step(scale, 70, 5, 100);
     assert(scale == 70);
+    assert(AssessLowering(50, 49, 15.0, 15.0) == LoweringResult::Pending);
+    assert(AssessLowering(50, 46, 15.0, 15.0) == LoweringResult::Rollback);
+    assert(AssessLowering(50, 46, 15.0, 14.0) == LoweringResult::Useful);
+    assert(AssessLowering(100, 96, 1.0, 1.0) == LoweringResult::Pending);
+    // Restoring the measured quality floor must not bypass the visual limit.
+    int rollback = 46;
+    for (int i = 0; i < 4; ++i) {
+        const int next = Step(rollback, 50, 5, 100);
+        assert(next == rollback + 1);
+        rollback = next;
+    }
+    assert(rollback == 50);
 }

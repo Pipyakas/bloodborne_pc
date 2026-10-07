@@ -21,7 +21,8 @@ post_ms() {
 for out in 1920x1080 2560x1440 3840x2160; do
     ow=${out%x*}; oh=${out#*x}
     preset=0
-    for ratio in 1.0 1.5 1.7 2.0 3.0; do
+    # The sixth graph is DRS, tested at a representative 50% input size.
+    for ratio in 1.0 1.5 1.7 2.0 3.0 2.0; do
         render=$(awk -v w="$ow" -v h="$oh" -v r="$ratio" 'BEGIN { printf "%dx%d", int(w / r + 0.5), int(h / r + 0.5) }')
         if ((oh <= 1080)); then
             bench 1 "$render" "$out" $preset "$frames" "$tmp/a.raw"

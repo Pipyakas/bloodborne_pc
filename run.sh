@@ -19,6 +19,10 @@ data=${BB_DATA_DIR:-.}
 out=$data/out
 mkdir -p "$out"
 export BB_CONFIG=${BB_CONFIG:-$data/bbport.ini}
+# Models installed in persistent data survive replacement of dist/linux.
+if [[ -z ${BB_FSR4_DIR:-} && ! -d fsr4_shaders && -d $data/fsr4_shaders ]]; then
+    export BB_FSR4_DIR=$data/fsr4_shaders
+fi
 # FSR 4.1.1 assets (tools/fsr4cap/build_assets.sh): next to run.sh or in the data directory.
 if [[ -z ${BB_FSR411_DIR:-} && ! -d fsr4_411 && -d $data/fsr4_411 ]]; then
     export BB_FSR411_DIR=$data/fsr4_411

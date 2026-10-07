@@ -43,9 +43,11 @@ Mesa/RADV) has been tested thoroughly.
 - **Native execution.** The eboot is converted offline into a flat memory image; PS4 libc and
   libSceFios2 are linked into it as native code. No CPU emulation and no per-instruction
   translation: the game code runs at full speed.
-- **Unlocked frame rate.** Community patches (`patches/Bloodborne.xml`) make the simulation
-  use the real frame time; ~90 FPS at 4K with FSR 4 Balanced on an RX 7800 XT, ~150 FPS at
-  1440p with FSR 4 Quality. Also 30/60/90 FPS modes.
+- **Unlocked frame rate.** Community patches (`patches/Bloodborne.xml`) add real-frame-time
+  updates alongside fixed timestep fixes; ~90 FPS at 4K with FSR 4 Balanced on an RX 7800 XT,
+  ~150 FPS at 1440p with FSR 4 Quality. Also 30/60/90 FPS modes. This is **not a fully
+  framerate-independent simulation**: `Uncap FPS++` warns of Havok problems above 90 FPS.
+  A high rendering FPS is not proof of correct sprint, collision, stamina or cloth timing.
 - **Temporal upscaling built for this game.** Bloodborne has no velocity buffer, so bbport
   computes motion vectors itself: camera motion from depth and the scene matrices, and object
   motion (characters, cloth, weapons) from the vertex positions of the previous frame. The
@@ -85,7 +87,8 @@ the graphics side.
 
 ## Requirements
 
-- Linux x86-64, a Vulkan 1.3 GPU. Tested: AMD RX 7800 XT with Mesa 26 (RADV).
+- Linux x86-64, a Vulkan 1.3 GPU. Tested: AMD RX 7800 XT with Mesa 26 (RADV),
+  RX 6700 XT with Mesa 26.2.2 (native FSR 3.1 and FSR 4 v07 INT8, including DRS).
   FSR 4 / 4.1.1 require shader Float16, Int8/Int16, integer dot products, linear compute
   derivatives and extended storage image formats; FSR 4.1.1 additionally requires
   `VK_VALVE_shader_mixed_float_dot_product`. Unsupported choices fall back to FSR 3.1
@@ -167,6 +170,8 @@ not implement GPU occlusion culling.
 
 ```bash
 bash tools/fetch_fsr4_assets.sh      # FSR 4 v07 (MIT, built from AMD's source by Q2RTX)
+BB_FSR4_DIR="$HOME/.local/share/bbport/fsr4_shaders" bash tools/fetch_fsr4_assets.sh
+# Optional persistent install: KDE launches find these models after package updates.
 # FSR 4.1.1, from your own AMD DLLs (e.g. OptiScaler's FSR4_LATEST), needs Proton (GE-Proton):
 bash tools/fsr4cap/build_assets.sh <amd_fidelityfx_upscaler_dx12.dll> <amd_fidelityfx_loader_dx12.dll>
 ```
@@ -342,6 +347,18 @@ than lowering. Menu/loading frames do not raise or lower the scene resolution. O
 changes preserve the jitter sequence and retain upscaler history where the provider supports
 dynamic render sizes; TAA still resets its render-sized history when resized. Smoother transitions
 trade some convergence speed for less visible popping.
+FSR 4 selects its DRS model rather than the last fixed preset's model. Lowering's benefit is
+assessed over multiple small steps so timer noise does not defeat the fixed-cost check;
+rollback also obeys the one-point limit. Recovery requires sustained headroom. Resolution
+changes can still be visible: this does not promise perceptually invisible DRS.
+
+**Movement timing diagnostics (Linux):** `BB_CAMERA_TRACE=N` logs the scene camera's world
+position every N camera frames (off by default). `tools/test_framerate_motion.py --game-dir
+<dump> --data-dir <persistent-data> --output-dir <new-private-directory>` compares a short
+sprint at 60/90/120 FPS, silently and minimized, with separate copies of the same save.
+It reports actual scene FPS and camera displacement per wall-clock second; camera motion is
+only a proxy, and collisions, camera catch-up or stamina exhaustion invalidate a speed test.
+The original settings and saves are not modified. Keep its logs and save copies private.
 
 **Frame generation (DLSS-G, Windows):** `frame_gen=2x|3x|4x|dynamic` (menu: *Frame generation*;
 switching it on or off needs a restart, the multiplier changes live) presents through a D3D12/DXGI

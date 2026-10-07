@@ -8,7 +8,7 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")/.."
 commit=ae8d628fae208813172446d1e49ed94150b04658
 base="https://raw.githubusercontent.com/FireBurn/Q2RTX/$commit/baseq2/fsr4_shaders"
-dest=fsr4_shaders
+dest=${BB_FSR4_DIR:-fsr4_shaders}
 mkdir -p "$dest"
 files=(LICENSE-FSR4-v07.txt rcas.spv spd_auto_exposure.spv)
 for model in native quality balanced performance ultraperf drs; do
@@ -30,7 +30,7 @@ for file in "${files[@]}"; do
     mv "$dest/$file.part" "$dest/$file"
     fetched=$((fetched + 1))
 done
-echo "FSR 4 assets: ${#files[@]} files in $PWD/$dest ($fetched downloaded)"
+echo "FSR 4 assets: ${#files[@]} files in $dest ($fetched downloaded)"
 # Faster, bit-exact post passes (fsr4_shaders/opt), when spirv-cross and glslang are available.
 if command -v spirv-cross >/dev/null && command -v glslangValidator >/dev/null; then
     bash tools/fsr4_optimize.sh

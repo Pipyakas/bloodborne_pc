@@ -1,0 +1,72 @@
+diff --git a/include/ffx_vk_fsr4_v07.h b/include/ffx_vk_fsr4_v07.h
+--- a/include/ffx_vk_fsr4_v07.h
++++ b/include/ffx_vk_fsr4_v07.h
+@@ -155,6 +155,9 @@ VkResult ffxFsr4VkBeginFrame(FfxInterface* iface, uint64_t frameId);
+ VkResult ffxFsr4VkRetireFrame(FfxInterface* iface, uint64_t completedFrameId);
+ 
+ /* Register or update host-owned state for one externally imported image.
++ * Register each dispatch's imports before recording it. UnregisterResources
++ * clears this registry after recording their restore barriers; it does not
++ * destroy host images or affect descriptors of GPU work still in flight.
+  * Unlike provider-owned resources, imports are never assumed to start in
+  * GENERAL.  Returns VK_ERROR_INITIALIZATION_FAILED for an invalid interface,
+  * VK_ERROR_VALIDATION_FAILED_EXT for an incomplete state record, and
+diff --git a/src/ffx_vk_fsr4_v07.c b/src/ffx_vk_fsr4_v07.c
+--- a/src/ffx_vk_fsr4_v07.c
++++ b/src/ffx_vk_fsr4_v07.c
+@@ -1060,6 +1060,11 @@ static FfxErrorCode cbUnregisterRes(FfxInterface* I, FfxCommandList cmd, FfxUInt32 id) {
+         else { if(i!=n) c->res[n]=c->res[i]; n++; }
+     }
+     c->resCount=n;
++    /* State imports belong to this dispatch, not to every image view ever
++     * seen by the context. GPU commands already contain the copied barriers
++     * and descriptors. Keeping stale views here exhausts the eight-slot
++     * registry after a few DRS resizes (and can match a recycled handle). */
++    c->externalImageCount = 0;
+     return FFX_OK;
+ }
+ 
+diff --git a/tests/fsr4_v07_lifetime_test.c b/tests/fsr4_v07_lifetime_test.c
+--- a/tests/fsr4_v07_lifetime_test.c
++++ b/tests/fsr4_v07_lifetime_test.c
+@@ -81,6 +81,7 @@ int main(void)
+     VkPhysicalDevice physical = VK_NULL_HANDLE;
+     VkImage external_image = VK_NULL_HANDLE;
+     VkImageView external_view = VK_NULL_HANDLE;
++    VkImageView resized_views[12] = {0};
+     VkDeviceMemory external_memory = VK_NULL_HANDLE;
+     uint32_t queue_family = UINT32_MAX;
+     FfxInterface backend;
+@@ -256,6 +257,23 @@ int main(void)
+     CHECK(ffxFsr4VkRetireFrame(&backend, 1u) == VK_SUCCESS);
+     CHECK(vkResetCommandBuffer(command_buffer, 0u) == VK_SUCCESS);
+ 
++    /* A retired import must not silently reuse stale state. More than eight
++     * distinct DRS views over the context lifetime must still be accepted. */
++    CHECK(backend.fpRegisterResource(&backend, &external_resource, 0u,
++                                     &external_handle) == FFX_ERROR_INVALID_ARGUMENT);
++    for (uint32_t resize = 0; resize < 12; ++resize) {
++        CHECK(vkCreateImageView(device, &view_info, NULL, &resized_views[resize]) == VK_SUCCESS);
++        external_state.view = resized_views[resize];
++        external_resource.resource = (void*)resized_views[resize];
++        CHECK(ffxFsr4VkSetExternalImageState(&backend, &external_state) == VK_SUCCESS);
++        CHECK(backend.fpRegisterResource(&backend, &external_resource, 0u,
++                                         &external_handle) == FFX_OK);
++        CHECK(vkBeginCommandBuffer(command_buffer, &begin_info) == VK_SUCCESS);
++        CHECK(backend.fpUnregisterResources(&backend, (FfxCommandList)command_buffer, 0u) == FFX_OK);
++        CHECK(vkEndCommandBuffer(command_buffer) == VK_SUCCESS);
++        CHECK(vkResetCommandBuffer(command_buffer, 0u) == VK_SUCCESS);
++    }
++
+     /* Three unretired records are supported. A fourth must not recycle a
+      * descriptor/constant partition without the host's completion signal. */
+     for (uint64_t frame_id = 1; frame_id <= 3; ++frame_id) {
+@@ -276,6 +294,8 @@ int main(void)
+ cleanup:
+     if (backend.device)
+         ffxFsr4VkDestroyContext((FfxFsr4VkContext *)backend.device);
++    for (uint32_t resize = 0; resize < 12; ++resize)
++        if (resized_views[resize]) vkDestroyImageView(device, resized_views[resize], NULL);
+     if (external_view)
+         vkDestroyImageView(device, external_view, NULL);
+     if (external_image)

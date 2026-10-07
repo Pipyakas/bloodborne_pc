@@ -204,6 +204,7 @@ private:
     int dlss_floor_percent = 5;
     bool drs_was_enabled = false;
     u32 drs_over_budget_windows = 0; ///< reject isolated half-second spikes
+    u32 drs_headroom_windows = 0; ///< recovery needs sustained, not transient CPU stalls
     int drs_lowered_from = 0;    ///< the percent before the last step down, until measured
     double drs_lowered_gpu_ms = 0.0;
     int drs_useful_floor = 0;    ///< lowering below stopped paying off (for 30 s)

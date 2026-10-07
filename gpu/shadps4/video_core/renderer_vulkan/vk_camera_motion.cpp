@@ -2,6 +2,7 @@
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
 
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -53,6 +54,10 @@ CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
     : instance{instance_}, scheduler{scheduler_}, texture_cache{texture_cache_}, runtime{runtime_} {
     const char* env = std::getenv("BB_DEBUG_MOTION");
     debug_overlay = env && env[0] == '1';
+    if (const char* trace = std::getenv("BB_CAMERA_TRACE")) {
+        const unsigned long interval = std::strtoul(trace, nullptr, 10);
+        if (interval && interval <= 60000) trace_interval = u32(interval);
+    }
     const char* upscaler = std::getenv("BB_UPSCALER");
     // The upscaler can be switched on from the menu at any time: the camera is always tracked
     // unless BB_UPSCALER=none.
@@ -232,6 +237,14 @@ void CameraMotion::OnConstants(const float* data) {
     std::memcpy(current.inv_view.data(), data + 180, 12 * sizeof(float));
     current.proj = {data[52], data[57], data[62], data[63]};
     current.valid = current.proj[0] != 0.0f && current.proj[1] != 0.0f;
+    if (trace_interval && ++trace_frames % trace_interval == 0 && current.valid) {
+        const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        // Camera position is a movement proxy, not the player's physics state.
+        std::printf("Camera trace: frame=%llu ns=%lld xyz=%.6f,%.6f,%.6f\n",
+                    static_cast<unsigned long long>(trace_frames), static_cast<long long>(ns),
+                    current.inv_view[3], current.inv_view[7], current.inv_view[11]);
+    }
     const std::array<u32, 2> size{u32(data[4]), u32(data[5])};
     if (size != render_size) {
         std::printf("Camera motion: scene render size %ux%u\n", size[0], size[1]);

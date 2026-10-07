@@ -109,6 +109,8 @@ private:
     Runtime& runtime;
     bool debug_overlay = false;
     bool for_upscaler = false;
+    u32 trace_interval = 0; ///< BB_CAMERA_TRACE: optional background movement diagnostics
+    u64 trace_frames = 0;
     vk::UniqueDescriptorSetLayout motion_desc_layout;
     vk::UniquePipelineLayout motion_pipeline_layout;
     vk::UniquePipeline motion_pipeline;

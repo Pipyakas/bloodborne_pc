@@ -19,4 +19,18 @@ inline int Seed(unsigned render_width, unsigned output_width, int floor, int cei
                                      : ceiling;
     return std::clamp(percent, floor, ceiling);
 }
+
+enum class LoweringResult { Pending, Useful, Rollback };
+
+inline LoweringResult AssessLowering(int from, int current, double before_ms, double after_ms) {
+    // A one-point change often predicts less than the timer/scene noise. Keep
+    // the baseline across several steps instead of forgetting it every window.
+    if (from <= 0 || from - current < 4 || !(before_ms > 0.0) ||
+        !std::isfinite(before_ms) || !std::isfinite(after_ms)) return LoweringResult::Pending;
+    const double predicted = before_ms *
+        (1.0 - double(current * current) / double(from * from));
+    if (predicted < 1.0) return LoweringResult::Pending;
+    return before_ms - after_ms < 0.1 * predicted ? LoweringResult::Rollback
+                                                 : LoweringResult::Useful;
+}
 } // namespace Vulkan::DynamicResolution

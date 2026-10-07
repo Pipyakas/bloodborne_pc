@@ -46,6 +46,8 @@ FfxFsr4ModelPreset ModelPreset(int preset) {
         return FFX_FSR4_MODEL_PRESET_BALANCED;
     case 3:
         return FFX_FSR4_MODEL_PRESET_PERFORMANCE;
+    case 5:
+        return FFX_FSR4_MODEL_PRESET_DRS;
     default:
         return FFX_FSR4_MODEL_PRESET_ULTRA_PERFORMANCE;
     }
@@ -184,6 +186,7 @@ struct Fsr4Upscaler::Impl {
         ffxCreateContextDescUpscale desc{};
         desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
         desc.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+        if (preset == 5) desc.flags |= FFX_UPSCALE_ENABLE_DYNAMIC_RESOLUTION;
         // Any preset's render size fits: the context is not recreated for a size change.
         desc.maxRenderSize = {(ow + 7) & ~7u, (oh + 7) & ~7u};
         desc.maxUpscaleSize = {(ow + 7) & ~7u, (oh + 7) & ~7u};
@@ -280,7 +283,7 @@ struct Fsr4Upscaler::Impl {
             Fail("the GPU lacks INT8 dot product / compute derivative support", true);
             return false;
         }
-        const int preset = std::clamp(f.preset, 0, 4);
+        const int preset = f.dynamic_resolution ? 5 : std::clamp(f.preset, 0, 4);
         if (!context_ok || preset != model || f.output.width != out_width ||
             f.output.height != out_height) {
             Destroy();

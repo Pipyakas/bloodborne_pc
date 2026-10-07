@@ -109,5 +109,12 @@ int main() {
     assert(JitterPhases(960, 1920) == 32);
     assert(JitterPhases(640, 1920) == 72);
     assert(JitterPhases(0, 1920) == 8);
+    assert(JitterPhases(1920, 3840) == 32); // live 4K uses output, not guest width
+    assert(NextJitterIndex(31, 1920, 3840, false) == 32);
+    assert(NextJitterIndex(32, 1920, 3840, false) == 1);
+    assert(NextJitterIndex(200, 1268, 3840, true) == 201);
+    assert(NextJitterIndex(200, 1306, 3840, true) == 201);
+    assert(NextJitterIndex(255, 1306, 3840, true) == 256);
+    assert(NextJitterIndex(256, 1268, 3840, true) == 1);
     std::puts("Motion history: PASS (ranges, restart, offsets, matching, capacity, gating, index cache, jitter)");
 }

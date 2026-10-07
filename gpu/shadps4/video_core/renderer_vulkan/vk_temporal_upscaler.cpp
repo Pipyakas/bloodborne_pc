@@ -339,7 +339,11 @@ bool TemporalUpscaler::OnFrameStart() {
         max_render_width = max_render.width;
         max_render_height = max_render.height;
         scene_targets.SetMaxSize(max_render);
-        if (changed) drs_useful_floor = 0; // another configuration: probe again
+        if (changed) {
+            // Savings/headroom from a different output or provider are not comparable.
+            drs_useful_floor = drs_lowered_from = drs_blocked = 0;
+            drs_over_budget_windows = drs_headroom_windows = 0;
+        }
         const int dynamic = UpdateDynamicResolution(
             base_percent, upscaler == BbSettings::UpscalerDlss ? dlss_floor_percent
                                                                : BbSettings::RenderScaleMin);
@@ -382,9 +386,9 @@ bool TemporalUpscaler::OnFrameStart() {
     }
     // CameraMotion::OnDisplayPass has already cleared Depth(). Use the context's render
     // size, which survives the frame boundary (Performance 960 -> 1920 needs 32 phases).
-    const u32 phases = Scaled() ? Motion::JitterPhases(render_width, target_width)
-        : Motion::JitterPhases(scene_targets.Size().width, 1920);
-    jitter_index = jitter_index % phases + 1;
+    jitter_index = Motion::NextJitterIndex(jitter_index,
+        Scaled() ? render_width : scene_targets.Size().width, target_width,
+        settings.dynamic_resolution && !scaled_session);
     jitter = {Halton(jitter_index, 2) - 0.5f, Halton(jitter_index, 3) - 0.5f};
     return changed || resized;
 }
@@ -408,6 +412,7 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
         drs_changed = now;
         drs_lowered_from = drs_useful_floor = drs_blocked = 0;
         drs_over_budget_windows = 0;
+        drs_headroom_windows = 0;
         drs_window = now;
         drs_busy_ns = 0;
         drs_frames = 0;
@@ -424,6 +429,7 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
         drs_busy_ns = 0;
         drs_frames = 0;
         drs_over_budget_windows = 0;
+        drs_headroom_windows = 0;
         settings.dynamic_percent = dynamic_percent ? dynamic_percent : base_percent;
         return dynamic_percent;
     }
@@ -448,6 +454,7 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
     // not convert an infinite fitted scale to int on startup/unsupported timers.
     if (!(gpu_ms > 0.0) || !std::isfinite(gpu_ms) || !std::isfinite(frame_ms)) {
         drs_over_budget_windows = 0;
+        drs_headroom_windows = 0;
         return dynamic_percent;
     }
     const u32 limit = EmulatorSettings.GetFrameLimit();
@@ -459,18 +466,19 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
         drs_useful_floor = 0;
     }
     const int floor = std::min(std::max(floor_percent, drs_useful_floor), base_percent);
-    int next = current;
+    int next = current < floor ? floor : current; // restore a useful floor gradually
     if (drs_lowered_from) {
-        // The first measurement after a step down: if the GPU saved under a tenth of what the
-        // pixel count predicts, its remaining work is not resolution-bound (the upscaler and
+        // Accumulate small steps until the predicted saving exceeds scene/timer noise. If
+        // the GPU saved under a tenth of what pixel count predicts, its remaining work is
+        // not resolution-bound (the upscaler and
         // HUD at output size, shadows) and the step only cost image quality. Go back up and
         // stop there (4K DLSS at a 120 FPS limit: 10% -> 5% saved 0.1 of 12.7 ms).
-        const double predicted = drs_lowered_gpu_ms *
-            (1.0 - double(current * current) / double(drs_lowered_from * drs_lowered_from));
         const double saved = drs_lowered_gpu_ms - gpu_ms;
         const int from = drs_lowered_from;
-        drs_lowered_from = 0;
-        if (predicted > 1.0 && saved < 0.1 * predicted) {
+        const auto result = DynamicResolution::AssessLowering(from, current,
+                                                              drs_lowered_gpu_ms, gpu_ms);
+        if (result != DynamicResolution::LoweringResult::Pending) drs_lowered_from = 0;
+        if (result == DynamicResolution::LoweringResult::Rollback) {
             std::printf("Dynamic resolution: %d%% -> %d%% saved %.1f of %.1f ms; back to %d%%\n",
                         from, current, saved, drs_lowered_gpu_ms, from);
             drs_useful_floor = from;
@@ -485,6 +493,8 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
     const bool over_budget = gpu_bound &&
                             (frame_ms > target_ms * 1.05 || gpu_ms > target_ms * 0.95);
     drs_over_budget_windows = over_budget ? std::min(drs_over_budget_windows + 1, 2u) : 0;
+    const bool headroom = gpu_ms < 0.8 * std::max(target_ms, frame_ms);
+    drs_headroom_windows = headroom ? std::min(drs_headroom_windows + 1, 4u) : 0;
     if (next != current) {
         // reverting a step that did not pay off
     } else if (over_budget && (drs_over_budget_windows >= 2 || gpu_ms > target_ms * 1.5) &&
@@ -498,8 +508,7 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
             drs_blocked = current;
             drs_blocked_at = now;
         }
-    } else if (current < base_percent && since_change >= 2.0 &&
-               gpu_ms < 0.8 * std::max(target_ms, frame_ms)) {
+    } else if (current < base_percent && since_change >= 2.0 && drs_headroom_windows >= 4) {
         // Headroom against whatever limits the frame (the target, or the CPU).
         // Recovery is slower than lowering and obeys the same one-point limit.
         const double budget = 0.85 * std::max(target_ms, frame_ms);
@@ -510,8 +519,11 @@ int TemporalUpscaler::UpdateDynamicResolution(int base_percent, int floor_percen
         }
         if (up > current) next = up;
     }
-    next = DynamicResolution::Step(current, next, floor, base_percent);
-    if (next < current) {
+    // The fitted useful floor is a quality target, not a provider safety bound:
+    // applying it as Step's hard floor would jump several points on rollback.
+    next = DynamicResolution::Step(current, next, floor_percent, base_percent);
+    if (next > current) drs_lowered_from = 0;
+    if (next < current && !drs_lowered_from) {
         drs_lowered_from = current;
         drs_lowered_gpu_ms = gpu_ms;
     }
@@ -593,6 +605,8 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     create_info.flags = hdr ? FFX_VK_PORTABLE_CONTEXT_HDR_COLOR_INPUT |
                                   FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE
                             : 0;
+    // Live presets as well as DRS may vary the input size within this context.
+    if (!scaled_session) create_info.flags |= FFX_VK_PORTABLE_CONTEXT_DYNAMIC_RESOLUTION;
     create_info.maxRenderSize = {max_w, max_h};
     create_info.maxOutputSize = {ow, oh};
     // FSR 4 has its own model context (vk_fsr4); the images below are shared.
@@ -2271,6 +2285,7 @@ bool TemporalUpscaler::RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image 
         .sharpen = settings.sharpen,
         .reset = reset,
         .auto_exposure = settings.fsr4_auto_exposure,
+        .dynamic_resolution = settings.dynamic_resolution && !scaled_session,
     };
     const bool ok = use_dlss ? dlss->Record(frame) : fsr4->Record(frame);
     if (use_dlss && !ok && dynamic_percent >= dlss_floor_percent) {

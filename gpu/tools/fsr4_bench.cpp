@@ -3,7 +3,7 @@
 // provider as vk_fsr4.cpp) on synthetic inputs and prints GPU time per pass (BB_FSR4_PROFILE)
 // and, with --stats, the driver's statistics of every pass (BB_FSR4_STATS).
 //
-//   fsr4-bench [render WxH] [output WxH] [preset 0-4] [frames] [--stats] [--fsr411]
+//   fsr4-bench [render WxH] [output WxH] [preset 0-5; 5=DRS] [frames] [--stats] [--fsr411]
 // --fsr411: FSR 4.1.1 replay (fsr411.cpp, assets in BB_FSR411_DIR or fsr4_411) instead of v07;
 // its frames match tools/fsr4cap (jitter phase, reset on the first frame).
 //   defaults: 2260x1272 3840x2160 2 (balanced) 900
@@ -239,6 +239,8 @@ FfxFsr4ModelPreset ModelPreset(int preset) {
         return FFX_FSR4_MODEL_PRESET_BALANCED;
     case 3:
         return FFX_FSR4_MODEL_PRESET_PERFORMANCE;
+    case 5:
+        return FFX_FSR4_MODEL_PRESET_DRS;
     default:
         return FFX_FSR4_MODEL_PRESET_ULTRA_PERFORMANCE;
     }
@@ -344,6 +346,7 @@ int main(int argc, char** argv) {
     ffxCreateContextDescUpscale desc{};
     desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
     desc.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+    if (preset == 5) desc.flags |= FFX_UPSCALE_ENABLE_DYNAMIC_RESOLUTION;
     desc.maxRenderSize = {(ow + 7) & ~7u, (oh + 7) & ~7u};
     desc.maxUpscaleSize = {(ow + 7) & ~7u, (oh + 7) & ~7u};
     ffxFsr4V07SetBackendInterface(&backend);

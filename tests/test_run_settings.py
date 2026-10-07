@@ -12,9 +12,21 @@ import unittest
 
 
 class RestartResolutionTests(unittest.TestCase):
-    def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False):
+    def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False,
+                     persistent_assets=False, packaged_assets=False, fsr4_override=None):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory)
+            root = ROOT
+            if persistent_assets:
+                root = data / 'package'
+                root.mkdir()
+                shutil.copy2(ROOT / 'run.sh', root / 'run.sh')
+                for folder in ('scripts', 'patches'):
+                    shutil.copytree(ROOT / folder, root / folder)
+                for folder in ('fsr4_shaders', 'fsr4_411'):
+                    (data / folder).mkdir()
+                    if packaged_assets:
+                        (root / folder).mkdir()
             # Preparation is unrelated to this test; allow the real patch compiler to
             # validate writes against a single ELF load segment spanning the game image.
             out = data / 'out'
@@ -45,7 +57,7 @@ class RestartResolutionTests(unittest.TestCase):
                 'stage=int(os.environ.get("BB_TEST_STAGE", "0"))\n'
                 'with (config.parent/"environments").open("a") as f:\n'
                 '    f.write(json.dumps({key:os.environ.get(key) for key in '
-                '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES")})+"\\n")\n'
+                 '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES", "BB_FSR4_DIR", "BB_FSR411_DIR")})+"\\n")\n'
                 'if stage<2:\n'
                 '    config.write_text("upscaler=fsr3\\npreset=4\\noutput_res="+'
                 '("1280x720" if stage==0 else "1920x1080")+"\\n")\n'
@@ -57,6 +69,10 @@ class RestartResolutionTests(unittest.TestCase):
             for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES', 'BB_TEST_STAGE'):
                 env.pop(key, None)
             env.pop('BB_LIVE_RES', None)
+            env.pop('BB_FSR4_DIR', None)
+            env.pop('BB_FSR411_DIR', None)
+            if fsr4_override is not None:
+                env['BB_FSR4_DIR'] = fsr4_override
             if explicit:
                 env['BB_RENDER_RES'] = '800x450'
             if live:
@@ -67,7 +83,7 @@ class RestartResolutionTests(unittest.TestCase):
                 for name in ('bash', 'dirname', 'mkdir', 'realpath'):
                     (tools / name).symlink_to(shutil.which(name))
                 env['PATH'] = str(tools)
-            subprocess.run([shutil.which('bash'), 'run.sh'], cwd=ROOT, env=env,
+            subprocess.run([shutil.which('bash'), 'run.sh'], cwd=root, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=30)
             return [json.loads(line) for line in (data / 'environments').read_text().splitlines()]
 
@@ -89,8 +105,9 @@ class RestartResolutionTests(unittest.TestCase):
         self.assertIsNone(self.run_restarts(ini_extra='live_resolution=1\n')[0]['BB_RENDER_RES'])
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=0\n', caps=1)[0]['BB_RENDER_RES'],
                          '854x480')
-        # Unset: off (the startup patch), whatever the GPU; auto asks the GPU check.
-        self.assertEqual(self.run_restarts(caps=1)[0]['BB_RENDER_RES'], '854x480')
+        # Unset defaults to auto, just like the explicit auto setting.
+        self.assertIsNone(self.run_restarts(caps=1)[0]['BB_RENDER_RES'])
+        self.assertEqual(self.run_restarts(caps=0)[0]['BB_RENDER_RES'], '854x480')
         self.assertIsNone(self.run_restarts(ini_extra='live_resolution=auto\n', caps=1)[0]['BB_RENDER_RES'])
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=auto\n', caps=0)[0]['BB_RENDER_RES'],
                          '854x480')
@@ -106,3 +123,15 @@ class RestartResolutionTests(unittest.TestCase):
         rows = self.run_restarts(explicit=True)
         self.assertEqual([row['BB_RENDER_RES'] for row in rows], ['800x450'] * 3)
         self.assertTrue(all(row['BB_AUTO_RENDER_RES'] is None for row in rows))
+
+    def test_persistent_upscaler_assets_survive_restarts(self):
+        rows = self.run_restarts(persistent_assets=True)
+        for key, folder in (('BB_FSR4_DIR', 'fsr4_shaders'), ('BB_FSR411_DIR', 'fsr4_411')):
+            self.assertTrue(all(Path(row[key]).name == folder for row in rows))
+            self.assertEqual(len({row[key] for row in rows}), 1)
+
+    def test_packaged_assets_and_explicit_override_take_precedence(self):
+        rows = self.run_restarts(persistent_assets=True, packaged_assets=True)
+        self.assertTrue(all(row['BB_FSR4_DIR'] is None for row in rows))
+        rows = self.run_restarts(persistent_assets=True, fsr4_override='/custom/models')
+        self.assertTrue(all(row['BB_FSR4_DIR'] == '/custom/models' for row in rows))

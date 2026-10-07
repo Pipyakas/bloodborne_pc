@@ -211,6 +211,15 @@ inline uint32_t JitterPhases(uint32_t render_width, uint32_t output_width) {
     return uint32_t(std::clamp(std::ceil(8.0 * ratio * ratio), 8.0, 256.0));
 }
 
+inline uint32_t NextJitterIndex(uint32_t index, uint32_t render_width,
+                                uint32_t output_width, bool dynamic) {
+    // DRS changes the ideal phase count. Changing the modulus with it can
+    // jump backwards through Halton even though no history was reset. Use a
+    // size-independent cycle during DRS; fixed presets retain their period.
+    const uint32_t phases = dynamic ? 256 : JitterPhases(render_width, output_width);
+    return index % phases + 1;
+}
+
 struct Draw {
     uint64_t shader{}, geometry{}, indices{}, topology{};
     uint32_t index_count{}, instances{}, first_instance{};

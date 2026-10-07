@@ -87,6 +87,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault('BB_CONFIG', str(data / 'bbport.ini'))
     config = Path(os.environ['BB_CONFIG'])
+    if 'BB_FSR4_DIR' not in os.environ and not (ROOT / 'fsr4_shaders').is_dir() and (data / 'fsr4_shaders').is_dir():
+        os.environ['BB_FSR4_DIR'] = str(data / 'fsr4_shaders')
     if 'BB_FSR411_DIR' not in os.environ and not (ROOT / 'fsr4_411').is_dir() and (data / 'fsr4_411').is_dir():
         os.environ['BB_FSR411_DIR'] = str(data / 'fsr4_411')
     # The last folder that worked is remembered, so run.bat alone starts the game afterwards.
