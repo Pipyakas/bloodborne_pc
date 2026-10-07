@@ -246,6 +246,18 @@ sound (input was tested through `BB_PAD_FILE`; gamepads and the keyboard go thro
 Linux), 110–120 FPS at 1080p in Iosefka's Clinic (~3,200 draws per frame, GPU command thread
 2.5 µs per draw). v1.09 dumps of other regions work as well (tested: CUSA00900).
 
+**Built on Linux, played on Windows:** a Linux machine can build the Windows port and a Windows
+PC only runs it. `tools/cross/build-windows.sh [commit]` (needs podman) cross-compiles with host
+clang against MSYS2's CLANG64 packages (the same libraries a native build uses) in a container,
+then stages a complete install in `dist/windows`: the commit's files, `out\bb-probe.exe` with
+every DLL it needs, and an embeddable Python for the launcher scripts, so the PC needs neither
+MSYS2 nor a compiler. `tools/cross/install-autobuild.sh` adds a systemd user timer that rebuilds
+`dist/windows` whenever `master` moves. On the PC, an install folder holds `Bloodborne.cmd`
+(the setup program's launcher with one extra line that runs `bbport-update.ps1` first): it
+asks the build machine over SSH (`ssh d1` by default; `BBPORT_REMOTE`, `BBPORT_REMOTE_DIST`)
+for its latest build and copies it in when it changed, keeping `bbport.ini`, saves, mods,
+the game folder and the DLSS files; when the build machine is off, the installed build starts.
+
 **Setup program:** `setup.bat` opens a window to choose the game folder and the settings
 (output resolution, frame rate, upscaler and preset, effects, game language, optional DLSS and
 FSR 4 model downloads, shortcuts). Install / Update then installs MSYS2 to `C:\msys64` when it
