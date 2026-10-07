@@ -3,7 +3,7 @@
 # when it differs from this one, copies it over this folder. Files the build doesn't contain
 # (bbport.ini, user\, mods\, out\game_dir.txt, prepared images, DLSS DLLs) are kept. If d1 can't be
 # reached in a few seconds the installed build starts unchanged. BBPORT_REMOTE / BBPORT_REMOTE_DIST
-# override the host and folder.
+# override the host and folder (the download is that folder's .tar.gz, packed with each build).
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $remote = if ($env:BBPORT_REMOTE) { $env:BBPORT_REMOTE } else { 'd1' }
@@ -24,8 +24,10 @@ $latest = $latest.Trim()
 if ($latest -eq $local) { exit 0 }
 Write-Host "Updating bbport to $($latest.Substring(0, 12)) from $remote ..."
 $archive = Join-Path $env:TEMP 'bbport-update.tar.gz'
-# cmd's redirection keeps the archive's bytes intact (PowerShell 5's would re-encode them).
-cmd /c "ssh -n -o BatchMode=yes -o ConnectTimeout=4 $remote `"tar -C $dist -czf - .`" > `"$archive`""
+# d1 packs each build once (build-windows.sh: dist/windows.tar.gz). scp writes the file itself:
+# streaming `ssh tar` into a redirected stdout stalled without a console.
+Remove-Item $archive -ErrorAction SilentlyContinue
+cmd /c "scp -B -q -o ConnectTimeout=4 ${remote}:$dist.tar.gz `"$archive`" 2>nul"
 if ($LASTEXITCODE -ne 0) { Write-Host 'Download failed: starting the installed build.'; exit 0 }
 # Windows's own tar (bsdtar): a GNU tar earlier on PATH would read "C:" as a remote host.
 & "$env:SystemRoot\System32\tar.exe" -xzf $archive -C $root

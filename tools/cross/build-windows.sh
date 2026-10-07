@@ -46,5 +46,9 @@ python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv
 printf '..\\scripts\r\n' >> "$(ls "$stage"/python/python3*._pth)"
 cp "$src/tools/cross/bbport-update.ps1" "$stage/"
 echo "$commit $(date -u +%Y-%m-%dT%H:%M:%SZ) $(git -C "$src" log -1 --format=%s "$commit")" > "$stage/BUILD"
+# The archive the laptop downloads (bbport-update.ps1), made once per build. It is swapped in before
+# the folder: an updater that sees the old BUILD with the new archive just updates again next launch.
+tar -C "$stage" -czf "$dist.tar.gz.part" .
+mv "$dist.tar.gz.part" "$dist.tar.gz"
 rm -rf "$dist.old"; [[ -d $dist ]] && mv "$dist" "$dist.old"; mv "$stage" "$dist"; rm -rf "$dist.old"
 echo "dist/windows: $(cut -c1-12 "$dist/BUILD")"
