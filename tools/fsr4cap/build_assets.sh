@@ -61,4 +61,4 @@ if [[ ${VERIFY:-0} == 1 ]]; then
     ninja -C out/gpu fsr4-bench >/dev/null
     bash tools/fsr4cap/verify.sh "$work"
 fi
-echo "FSR 4 DLL model assets in $PWD/fsr4_dll (bbport.ini: upscaler=fsr4, fsr4_model=auto or dll)"
+echo "FSR 4 DLL model assets in $PWD/fsr4_dll (bbport.ini: upscaler=fsr4, fsr4_model=highest or dll)"

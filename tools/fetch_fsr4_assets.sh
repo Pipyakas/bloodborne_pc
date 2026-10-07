@@ -30,7 +30,18 @@ for file in "${files[@]}"; do
     mv "$dest/$file.part" "$dest/$file"
     fetched=$((fetched + 1))
 done
-echo "FSR 4 assets: ${#files[@]} files in $dest ($fetched downloaded)"
+# The model's version, as tools/fsr4cap/manifest.py records it for DLL models: the FidelityFX SDK
+# source the assets were built from (LICENSE-FSR4-v07.txt, revision 01446e6) declares upscaler
+# 4.0.2 (resource.h; its signed DLL is 4.0.2.44888). The menu and the FPS counter show it.
+cat > "$dest/manifest.json" <<'JSON'
+{
+  "format": 1,
+  "layout": "fsr4-v07-i8",
+  "upscaler_version": "4.0.2",
+  "source": "WinLinux1028/FidelityFX-SDK_WithFSR4 01446e6a74888bf349652fcf2cbf5f642d30c2bf via FireBurn/Q2RTX ae8d628fae208813172446d1e49ed94150b04658"
+}
+JSON
+echo "FSR 4 assets: ${#files[@]} files in $dest ($fetched downloaded), model 4.0.2"
 # Faster, bit-exact post passes (fsr4_shaders/opt), when spirv-cross and glslang are available.
 if command -v spirv-cross >/dev/null && command -v glslangValidator >/dev/null; then
     bash tools/fsr4_optimize.sh

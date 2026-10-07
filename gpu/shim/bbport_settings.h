@@ -14,11 +14,15 @@ enum Upscaler : int { UpscalerOff = 0, UpscalerFsr3 = 1, UpscalerFsr4 = 2, Upsca
 inline bool IsFsr4(int upscaler) {
     return upscaler == UpscalerFsr4;
 }
-/// The FSR 4 model: the one recorded from the user's AMD upscaler DLL (tools/fsr4cap, the
-/// replay in fsr411/), or v07 from the FidelityFX SDK sources (bundled). Auto prefers the DLL
-/// model where its assets and device features are present.
-enum Fsr4Model : int { Fsr4ModelAuto = 0, Fsr4ModelDll, Fsr4ModelSdk, Fsr4ModelCount };
-const char* Fsr4ModelName(int model); ///< bbport.ini fsr4_model: auto, dll, sdk
+/// The FSR 4 model: Highest (the installed model with the highest version), the one recorded
+/// from the user's AMD upscaler DLL (tools/fsr4cap, the replay in fsr411/), or the bundled one
+/// built from the FidelityFX SDK source (v07). Menus show their versions (manifest.json).
+enum Fsr4Model : int { Fsr4ModelHighest = 0, Fsr4ModelDll, Fsr4ModelSdk, Fsr4ModelCount };
+const char* Fsr4ModelName(int model); ///< bbport.ini fsr4_model: highest (or auto), dll, sdk
+/// -1, 0, 1 as dotted versions compare ("4.1.1.3529" > "4.0.2"; missing parts are 0).
+int CompareVersions(const char* a, const char* b);
+/// The model the current choice runs when both can: Fsr4ModelDll or Fsr4ModelSdk.
+int Fsr4PreferredModel();
 /// FSR 4 or DLSS: one frame's inputs to a separate upscaler, which writes the
 /// output image (TemporalUpscaler::RecordFsr4); FSR 3.1 and TAA are recorded in place.
 inline bool IsFrameUpscaler(int upscaler) {
@@ -111,12 +115,13 @@ struct Values {
     // FSR 4 checks (menu): the provider's auto exposure, the jitter sign it is given.
     std::atomic<bool> fsr4_auto_exposure{true};
     std::atomic<bool> fsr4_invert_jitter{false};
-    std::atomic<int> fsr4_model{Fsr4ModelAuto};
+    std::atomic<int> fsr4_model{Fsr4ModelHighest};
     /// Set by the renderer: the FSR 4 model that ran last (Fsr4ModelDll or Fsr4ModelSdk, 0
-    /// before the first FSR 4 frame), and the DLL model's version from its manifest (null:
-    /// not loaded, "" when the asset set predates manifests).
+    /// before the first FSR 4 frame), and the installed models' versions from their manifests
+    /// at start (DLL: null when not installed, "" for a set from before manifests).
     std::atomic<int> fsr4_model_active{0};
     std::atomic<const char*> fsr4_dll_version{nullptr};
+    std::atomic<const char*> fsr4_sdk_version{nullptr};
     std::atomic<int> active_render_width{1920}, active_render_height{1080};
     /// The temporal upscaler ran on the last frame (menus and loading screens skip it).
     std::atomic<bool> upscaler_ran{false};

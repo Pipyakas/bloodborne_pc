@@ -17,13 +17,17 @@ FSR Native AA is not a fast pass-through: it renders at the output resolution an
 also executes the temporal reconstruction (including the model for FSR 4) and
 optional sharpening. It can therefore be slower than no AA at the same output.
 
-**FSR 4 models (2026-10-07).** FSR 4 is one upscaler with two networks, `fsr4_model=auto|dll|sdk`:
-the bundled SDK v07 model, or the DLL model replayed from the user's own AMD upscaler DLL
+**FSR 4 models (2026-10-07).** FSR 4 is one upscaler with two networks, `fsr4_model=highest|dll|sdk`
+(`auto`, an earlier name, reads as highest), named by version in the menus and the FPS counter:
+the bundled v07 model, FSR 4.0.2 (its FidelityFX SDK source, WinLinux1028/FidelityFX-SDK_WithFSR4
+01446e6, declares upscaler 4.0.2; `tools/fetch_fsr4_assets.sh` writes that into its
+`manifest.json`), or the DLL model replayed from the user's own AMD upscaler DLL
 (what was `upscaler=fsr411`, still read as `fsr4_model=dll`). The port never loads an AMD DLL at
 run time, so there is no `ffxQueryVersions` to ask: `tools/fsr4cap/manifest.py` writes
 `manifest.json` next to the assets with the source DLL's file version, after checking that each
 set's weights occur verbatim in that DLL, and the pass layout (`fsr4cap-1`). The menu and the FPS
-counter show that version; the runtime refuses another layout. Auto, and a DLL model that cannot
+counter show that version; the runtime refuses another layout. Highest (the default) runs the newer installed model the GPU
+supports; it, and a DLL model that cannot
 run (missing assets for this output tier, device feature, layout), run v07 instead of falling back
 to FSR 3.1; the DLL model is retried after an output change. AMD's 4.1.1.2740 (The Witcher 3) and
 4.1.1.3529 (CONTROL Resonant) DLLs give byte-identical assets for all four sets.

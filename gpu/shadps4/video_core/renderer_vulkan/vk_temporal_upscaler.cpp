@@ -169,6 +169,7 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
     if (instance.IsDlssCapable()) {
         dlss = std::make_unique<DlssUpscaler>(instance, scheduler);
     }
+    Fsr4Upscaler::PublishModels();
     BbSettings::ConfigureUpscalerSupport(instance.IsFsr4Int8Supported(),
                                          instance.IsFsr4DllSupported(),
                                          dlss && dlss->Available());

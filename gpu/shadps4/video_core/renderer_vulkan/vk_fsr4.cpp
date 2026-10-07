@@ -7,6 +7,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -41,8 +42,21 @@ std::string DllAssetDir() {
                : "fsr4_dll";
 }
 
-// Outlives the provider: the menu reads it through BbSettings::fsr4_dll_version.
-std::string dll_version;
+// Outlive the providers: the menus read them through BbSettings::fsr4_{dll,sdk}_version.
+std::string dll_version, sdk_version;
+
+/// "upscaler_version" of an asset folder's manifest.json (tools/fsr4cap/manifest.py,
+/// tools/fetch_fsr4_assets.sh); empty without one.
+std::string ManifestVersion(const std::string& dir) {
+    std::ifstream file(dir + "/manifest.json");
+    const std::string text{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    size_t at = text.find("\"upscaler_version\"");
+    if (at == std::string::npos || (at = text.find('"', text.find(':', at))) == std::string::npos) {
+        return {};
+    }
+    const size_t end = text.find('"', at + 1);
+    return end == std::string::npos ? std::string{} : text.substr(at + 1, end - at - 1);
+}
 
 bool ReadFile(const std::string& path, std::vector<u8>& data) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -252,15 +266,14 @@ struct Fsr4Upscaler::Impl {
     /// Whether this frame tries the DLL model; sets dll_note when the user chose it and it
     /// cannot run.
     bool WantDll(const Frame& f) {
-        const int choice = BbSettings::Get().fsr4_model;
-        if (choice == BbSettings::Fsr4ModelSdk) {
+        if (BbSettings::Fsr4PreferredModel() != BbSettings::Fsr4ModelDll) {
             return false;
         }
-        const bool chosen = choice == BbSettings::Fsr4ModelDll;
+        const bool chosen = BbSettings::Get().fsr4_model == BbSettings::Fsr4ModelDll;
         if (!instance.IsFsr4DllSupported()) {
-            dll_note = chosen ? "the GPU lacks VK_VALVE_shader_mixed_float_dot_product; "
-                                "using the SDK v07 model"
-                              : "";
+            dll_note = chosen ? "the GPU lacks VK_VALVE_shader_mixed_float_dot_product; using FSR " +
+                                    sdk_version
+                              : std::string{};
             return false;
         }
         if (dll_failed_width == f.output.width && dll_failed_height == f.output.height) {
@@ -274,8 +287,6 @@ struct Fsr4Upscaler::Impl {
         if (!fsr411) {
             fsr411 = std::make_unique<Fsr411::Upscaler>(instance.GetPhysicalDevice(), instance.GetDevice(),
                                                         DllAssetDir());
-            dll_version = fsr411->Version();
-            BbSettings::Get().fsr4_dll_version = dll_version.c_str();
         }
         // Its constant ring holds kFramesInFlight frames: the oldest must be done.
         while (fsr411_ticks.size() >= Fsr411::kFramesInFlight) {
@@ -301,10 +312,10 @@ struct Fsr4Upscaler::Impl {
             // v07 runs instead until the output size changes; the menu shows why if chosen.
             dll_failed_width = f.output.width;
             dll_failed_height = f.output.height;
-            std::printf("Upscaler: FSR 4 DLL model unavailable (%s); using the SDK v07 model\n",
-                        fsr411->Error().c_str());
+            std::printf("Upscaler: FSR 4 DLL model unavailable (%s); using FSR %s\n",
+                        fsr411->Error().c_str(), sdk_version.c_str());
             dll_note = BbSettings::Get().fsr4_model == BbSettings::Fsr4ModelDll
-                           ? fsr411->Error() + "; using the SDK v07 model"
+                           ? fsr411->Error() + "; using FSR " + sdk_version
                            : "";
             return false;
         }
@@ -423,6 +434,29 @@ struct Fsr4Upscaler::Impl {
         return true;
     }
 };
+
+void Fsr4Upscaler::PublishModels() {
+    // The bundled model without a manifest (fetched before manifests): its pinned source, the
+    // SDK's upscaler 4.0.2 (tools/fetch_fsr4_assets.sh).
+    sdk_version = ManifestVersion(AssetDir());
+    if (sdk_version.empty()) {
+        sdk_version = "4.0.2";
+    }
+    auto& settings = BbSettings::Get();
+    settings.fsr4_sdk_version = sdk_version.c_str();
+    std::error_code ec;
+    const std::string dir = DllAssetDir();
+    if (std::filesystem::is_directory(dir, ec)) {
+        dll_version = ManifestVersion(dir);
+        settings.fsr4_dll_version = dll_version.c_str();
+    }
+    std::printf("Upscaler: FSR 4 models: %s (bundled)%s%s%s\n", sdk_version.c_str(),
+                settings.fsr4_dll_version.load() ? ", " : "",
+                settings.fsr4_dll_version.load() ? (dll_version.empty() ? "DLL model, version unknown"
+                                                                         : dll_version.c_str())
+                                                 : "",
+                settings.fsr4_dll_version.load() ? (" in " + dir).c_str() : "");
+}
 
 Fsr4Upscaler::Fsr4Upscaler(const Instance& instance, Scheduler& scheduler)
     : impl{std::make_unique<Impl>(instance, scheduler)} {}

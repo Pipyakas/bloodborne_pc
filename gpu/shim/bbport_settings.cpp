@@ -36,6 +36,9 @@ void Set(Values& v, const std::string& key, const std::string& value) {
             }
         }
     } else if (key == "fsr4_model") {
+        if (value == "auto") { // its name before highest
+            v.fsr4_model = Fsr4ModelHighest;
+        }
         for (int m = 0; m < Fsr4ModelCount; ++m) {
             if (value == Fsr4ModelName(m)) {
                 v.fsr4_model = m;
@@ -305,8 +308,40 @@ const char* UpscalerName(int upscaler) {
 }
 
 const char* Fsr4ModelName(int model) {
-    static constexpr const char* names[Fsr4ModelCount] = {"auto", "dll", "sdk"};
+    static constexpr const char* names[Fsr4ModelCount] = {"highest", "dll", "sdk"};
     return names[std::clamp(model, 0, Fsr4ModelCount - 1)];
+}
+
+int CompareVersions(const char* a, const char* b) {
+    for (;;) {
+        char* end_a = nullptr;
+        char* end_b = nullptr;
+        const long x = a && *a ? std::strtol(a, &end_a, 10) : 0;
+        const long y = b && *b ? std::strtol(b, &end_b, 10) : 0;
+        if (x != y) {
+            return x < y ? -1 : 1;
+        }
+        a = end_a && *end_a == '.' ? end_a + 1 : nullptr;
+        b = end_b && *end_b == '.' ? end_b + 1 : nullptr;
+        if (!a && !b) {
+            return 0;
+        }
+    }
+}
+
+int Fsr4PreferredModel() {
+    const auto& v = Get();
+    const int choice = v.fsr4_model;
+    if (choice != Fsr4ModelHighest) {
+        return choice;
+    }
+    const char* dll = v.fsr4_dll_version.load();
+    if (!dll || !v.fsr4_dll_supported) {
+        return Fsr4ModelSdk;
+    }
+    // A DLL set from before manifests: its replay only exists for the 4.1 models.
+    return CompareVersions(dll[0] ? dll : "4.1", v.fsr4_sdk_version.load()) > 0 ? Fsr4ModelDll
+                                                                               : Fsr4ModelSdk;
 }
 
 const char* LaunchName(int launch) {

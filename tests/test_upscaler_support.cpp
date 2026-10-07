@@ -67,13 +67,40 @@ int main() {
         ConfigureUpscalerSupport(true, false, false);
         assert(s.upscaler == UpscalerFsr4 && !s.fsr4_dll_supported && !s.fsr4_problem.load());
     }
+    assert(CompareVersions("4.1.1.3529", "4.0.2") > 0 && CompareVersions("4.0.2", "4.0.2.0") == 0);
+    assert(CompareVersions("4.1.1.2740", "4.1.1.3529") < 0 && CompareVersions("4.10", "4.9") > 0);
+    // Highest: the DLL model when installed, supported and newer than the bundled one.
+    s.fsr4_model = Fsr4ModelHighest;
+    s.fsr4_sdk_version = "4.0.2";
+    s.fsr4_dll_version = nullptr;
+    ConfigureUpscalerSupport(true, true, false);
+    assert(Fsr4PreferredModel() == Fsr4ModelSdk);
+    s.fsr4_dll_version = "4.1.1.3529";
+    assert(Fsr4PreferredModel() == Fsr4ModelDll);
+    s.fsr4_dll_version = ""; // a set from before manifests
+    assert(Fsr4PreferredModel() == Fsr4ModelDll);
+    s.fsr4_dll_version = "4.0.1";
+    assert(Fsr4PreferredModel() == Fsr4ModelSdk);
+    s.fsr4_dll_version = "4.1.1.3529";
+    ConfigureUpscalerSupport(true, false, false);
+    assert(Fsr4PreferredModel() == Fsr4ModelSdk);
+    s.fsr4_model = Fsr4ModelDll;
+    assert(Fsr4PreferredModel() == Fsr4ModelDll); // chosen: tried, the renderer explains
+    {
+        FILE* config = std::fopen(path, "w");
+        assert(config);
+        std::fputs("upscaler=fsr4\nfsr4_model=auto\n", config);
+        std::fclose(config);
+        Load();
+        assert(s.fsr4_model == Fsr4ModelHighest);
+    }
     // Settings from before fsr4_model: upscaler=fsr411 was the DLL model.
     {
         FILE* config = std::fopen(path, "w");
         assert(config);
         std::fputs("upscaler=fsr411\npreset=3\n", config);
         std::fclose(config);
-        s.fsr4_model = Fsr4ModelAuto;
+        s.fsr4_model = Fsr4ModelHighest;
         Load();
         assert(s.upscaler == UpscalerFsr4 && s.fsr4_model == Fsr4ModelDll);
         setenv("BB_UPSCALER", "fsr411", 1);

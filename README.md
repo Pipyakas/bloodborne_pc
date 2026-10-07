@@ -58,14 +58,15 @@ Mesa/RADV) has been tested thoroughly.
   the output (720p for the Steam Deck, 1080p, 1440p or 2160p) and the UI is drawn natively at the output resolution.
   - **FSR 3.1** (FireBurn/FSR-Vulkan).
   - **FSR 4 (INT8)** on GPUs exposing the required Vulkan shader features — RDNA2/3 included
-    (see Requirements), with two sources for its network (*FSR 4 model*, `fsr4_model`):
-    - **SDK v07** (bundled): AMD's open FidelityFX SDK model.
-    - **AMD DLL model**: the network of your own `amd_fidelityfx_upscaler_dx12.dll` (from a game
+    (see Requirements), with two networks, named by version in the menus and the FPS counter
+    (*FSR 4 model*, `fsr4_model`):
+    - **FSR 4.0.2** (bundled, `sdk`): the INT8 v07 model built from AMD's FidelityFX SDK source.
+    - **FSR 4.1.x** (`dll`): the network of your own `amd_fidelityfx_upscaler_dx12.dll` (from a game
       or OptiScaler), recorded once under vkd3d-proton and replayed natively on Vulkan; the
       output is **bit-exact** with the DLL. Its assets are built on your machine
-      (`tools/fsr4cap`) and record the DLL's version, which the menu and FPS counter show.
+      (`tools/fsr4cap`) and record the DLL's version (e.g. 4.1.1.3529).
       AMD's 4.1.1.2740 and 4.1.1.3529 give identical assets.
-    - *Auto* (default) uses the DLL model where its assets and GPU features are present, else v07.
+    - *Highest* (default) runs the newest installed model the GPU supports.
   - Faster than AMD's own shaders on RDNA3: the final passes of both FSR 4 models were rewritten
     to store through workgroup memory (3.5× and 2.3× faster, bit-exact); FSR 4 costs ~4 ms at
     4K on an RX 7800 XT instead of ~6 ms.
@@ -228,7 +229,7 @@ When running from source, install MangoHud separately. A diagnostic launch with
 `VK_LOADER_LAYERS_DISABLE=~implicit~` also disables MangoHud.
 
 Useful variables: `BB_FRAME_STATS=1` (frame statistics), `BB_GPU_PROFILE=1` (GPU time per
-pass), `BB_FSR4_PROFILE=1` (GPU time per FSR 4 pass), `BB_UPSCALER=taa|fsr3|fsr4|off|none`, `BB_FSR4_MODEL=auto|dll|sdk`,
+pass), `BB_FSR4_PROFILE=1` (GPU time per FSR 4 pass), `BB_UPSCALER=taa|fsr3|fsr4|off|none`, `BB_FSR4_MODEL=highest|dll|sdk`,
 `BB_FRAMES_AHEAD=N` (how many frames the GPU command thread may run ahead of the GPU; 1 by default,
 0 = unbounded), `BB_PRESENT_THREAD=0` (present on the vblank thread, as before),
 `BB_LIVE_RES=1` (live resolution changes instead of the startup patch for outputs other than 1080p),

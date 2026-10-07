@@ -334,15 +334,28 @@ void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
     Store(value, v, changed);
 }
 
-/// "FSR 4" with the model that ran: the DLL's version from its manifest, or v07.
+/// "FSR <version>" of an FSR 4 model (its manifest.json): "FSR 4.1.1.3529", "FSR 4.0.2".
+void ModelLabel(char* out, size_t size, int model) {
+    const auto& s = BbSettings::Get();
+    const char* version = model == BbSettings::Fsr4ModelDll ? s.fsr4_dll_version.load()
+                                                            : s.fsr4_sdk_version.load();
+    if (model == BbSettings::Fsr4ModelDll && !version) {
+        std::snprintf(out, size, "Model from your AMD DLL (not installed)");
+    } else if (!version || !version[0]) {
+        std::snprintf(out, size, "FSR 4.1 (build unknown)"); // a DLL set from before manifests
+    } else {
+        std::snprintf(out, size, "FSR %s", version);
+    }
+}
+
+/// The FPS counter's name for FSR 4: the model that ran, by version.
 const char* Fsr4Label() {
     static char label[64];
-    const auto& s = BbSettings::Get();
-    const char* version = s.fsr4_dll_version.load();
-    if (s.fsr4_model_active != BbSettings::Fsr4ModelDll) {
-        return s.fsr4_model_active == BbSettings::Fsr4ModelSdk ? "FSR 4 v07" : "FSR 4";
+    const int active = BbSettings::Get().fsr4_model_active;
+    if (!active) {
+        return "FSR 4";
     }
-    std::snprintf(label, sizeof(label), "FSR 4 %s", version && version[0] ? version : "(DLL)");
+    ModelLabel(label, sizeof(label), active);
     return label;
 }
 
@@ -432,25 +445,31 @@ void Menu() {
         const bool model_note = BbSettings::IsFsr4(s.upscaler) &&
                                 s.fsr4_model_active == BbSettings::Fsr4ModelSdk;
         ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "%s: %s",
-                           model_note ? "AMD DLL model not used" : "Upscaler unavailable", problem);
+                           model_note ? "Selected FSR 4 model not used" : "Upscaler unavailable", problem);
         if (!BbSettings::IsFsr4(s.upscaler))
             ImGui::TextUnformatted("The mode selected above is active. You can select it again to retry.");
         ImGui::PopTextWrapPos();
     }
     if (BbSettings::IsFsr4(s.upscaler)) {
-        // The DLL model's label comes from its assets' manifest (the DLL it was recorded from).
-        const char* version = s.fsr4_dll_version.load();
-        char dll_label[96];
-        std::snprintf(dll_label, sizeof(dll_label), "AMD DLL model%s%s%s",
-                      version && version[0] ? " (" : "", version && version[0] ? version : "",
-                      version && version[0] ? ")" : "");
-        const char* models[] = {"Auto (DLL model if installed)", dll_label, "SDK v07 (bundled)"};
+        // Models by version (their manifest.json); Highest runs the newer installed one.
+        char names[BbSettings::Fsr4ModelCount][64];
+        ModelLabel(names[BbSettings::Fsr4ModelDll], sizeof(names[0]), BbSettings::Fsr4ModelDll);
+        ModelLabel(names[BbSettings::Fsr4ModelSdk], sizeof(names[0]), BbSettings::Fsr4ModelSdk);
+        const int best = s.fsr4_dll_version.load() && s.fsr4_dll_supported.load() &&
+                                 BbSettings::CompareVersions(
+                                     s.fsr4_dll_version.load()[0] ? s.fsr4_dll_version.load() : "4.1",
+                                     s.fsr4_sdk_version.load()) > 0
+                             ? BbSettings::Fsr4ModelDll
+                             : BbSettings::Fsr4ModelSdk;
+        std::snprintf(names[BbSettings::Fsr4ModelHighest], sizeof(names[0]), "Highest (%s)",
+                      names[best]);
         int model = s.fsr4_model;
-        if (ImGui::BeginCombo("FSR 4 model", models[model])) {
+        if (ImGui::BeginCombo("FSR 4 model", names[model])) {
             for (int i = 0; i < BbSettings::Fsr4ModelCount; ++i) {
+                const bool installed = i != BbSettings::Fsr4ModelDll || s.fsr4_dll_version.load();
                 const bool supported = i != BbSettings::Fsr4ModelDll || s.fsr4_dll_supported.load();
-                ImGui::BeginDisabled(!supported);
-                if (ImGui::Selectable(models[i], i == model)) {
+                ImGui::BeginDisabled(!supported || !installed);
+                if (ImGui::Selectable(names[i], i == model)) {
                     Store(s.fsr4_model, i, true);
                 }
                 ImGui::EndDisabled();
@@ -461,17 +480,16 @@ void Menu() {
             }
             ImGui::EndCombo();
         }
-        const int active = s.fsr4_model_active;
-        if (active == BbSettings::Fsr4ModelDll) {
-            ImGui::Text("In use: %s", dll_label);
-        } else if (active == BbSettings::Fsr4ModelSdk) {
-            ImGui::TextUnformatted("In use: SDK v07");
+        if (const int active = s.fsr4_model_active) {
+            char in_use[64];
+            ModelLabel(in_use, sizeof(in_use), active);
+            ImGui::Text("In use: %s", in_use);
         }
-        Hint("The DLL model is the network of your AMD upscaler DLL (amd_fidelityfx_upscaler_dx12, "
-             "e.g. from a game or OptiScaler), recorded once and replayed on Vulkan with output "
-             "matching the DLL; build it with tools/fsr4cap/build_assets.sh. Its version is the "
-             "DLL's. The SDK v07 model comes from AMD's FidelityFX SDK sources and is bundled. "
-             "Auto uses the DLL model where its assets and GPU features are present.");
+        Hint("FSR 4 runs one of two networks, named by version. The bundled one (4.0.2) is built "
+             "from AMD's FidelityFX SDK source. A newer one (e.g. 4.1.1) is the network of your own "
+             "AMD upscaler DLL (amd_fidelityfx_upscaler_dx12, from a game or OptiScaler), recorded "
+             "once and replayed on Vulkan with output matching the DLL: tools/fsr4cap/build_assets.sh. "
+             "Highest runs the newest installed model this GPU supports.");
         Checkbox("FSR 4: auto exposure", s.fsr4_auto_exposure);
         Checkbox("FSR 4: invert jitter sign", s.fsr4_invert_jitter);
         Hint("For ghosting checks: the FSR 4 network normalizes color by exposure and uses it "

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'launcher'))
-from bbport_assets import dll_model_dir, dll_model_problem, dll_model_version
+from bbport_assets import dll_model_dir, dll_model_problem, dll_model_version, sdk_model_dir
 
 
 class UpscalerAssetsTests(unittest.TestCase):
@@ -51,6 +51,15 @@ class UpscalerAssetsTests(unittest.TestCase):
             self.assertEqual(dll_model_dir(port, data, {'BB_FSR411_DIR': '/a'}), Path('/a'))
             self.assertEqual(dll_model_dir(port, data, {'BB_FSR4_DLL_DIR': '/b', 'BB_FSR411_DIR': '/a'}),
                              Path('/b'))
+
+    def test_bundled_model_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            port, data = Path(tmp) / 'port', Path(tmp) / 'data'
+            port.mkdir()
+            self.assertEqual(sdk_model_dir(port, data, {}), data / 'fsr4_shaders')
+            (port / 'fsr4_shaders').mkdir()
+            self.assertEqual(sdk_model_dir(port, data, {}), port / 'fsr4_shaders')
+            self.assertEqual(sdk_model_dir(port, data, {'BB_FSR4_DIR': '/c'}), Path('/c'))
 
     def test_version_comes_from_the_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
