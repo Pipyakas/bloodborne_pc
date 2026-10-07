@@ -27,6 +27,8 @@ Confidence labels and unresolved objections in each note still apply.
   a distinct class; a constructor-like store does not prove inheritance.
 - `frame_timing/`: frame-loop/timestep and patch-site analysis. In particular,
   the proposed explanation for a ~120 FPS ceiling remains unproven.
+- `fps_compare/`: the high-FPS sprint slowdown (root cause and fix), FromSoftware's DRS
+  parameters in later games, TAA notes. Reference-game files stay private.
 - `renderer/`: front-end target candidates and hooks, not a recovered renderer.
 - `resolution_menus/`: resolution/menu targets and possible patch replacements.
 - `strings/`: string-reference naming methodology. Hints are not original symbols.

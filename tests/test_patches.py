@@ -1,12 +1,14 @@
 from paths import ROOT
+import shutil
 import struct
+import subprocess
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from patches import (EBOOT_BASE, OUTPUT_SIZE, RESOLUTION_TEMPLATE, SCENE_HEIGHT,
-                     SCENE_WIDTH, UI_HEIGHT, UI_WIDTH, compile_patches,
+from patches import (EBOOT_BASE, FPS_PRESETS, SPRINT_FIX, OUTPUT_SIZE, RESOLUTION_TEMPLATE,
+                     SCENE_HEIGHT, SCENE_WIDTH, UI_HEIGHT, UI_WIDTH, compile_patches,
                      render_size, resolution_writes, scaled_sizes, effect_patches,
                      validate_patch_requirements, external_patches, external_selection,
                      compile_external)
@@ -85,6 +87,33 @@ class NativeUiTests(unittest.TestCase):
                          ((1916, 1078), (3840, 2160)))
         # TAA is native-only and uses the live host targets.
         self.assertIsNone(scaled_sizes({'output_res': '1280x720', 'upscaler': 'taa', 'preset': '3'}))
+
+
+class SprintFixTests(unittest.TestCase):
+    def test_fixed_frame_rates_above_30_include_the_sprint_fix(self):
+        self.assertEqual(FPS_PRESETS['30'], [])
+        for fps in ('60', '90', 'uncap'):
+            self.assertIn(SPRINT_FIX, FPS_PRESETS[fps])
+
+    def test_sprint_fix_replaces_only_the_stuck_check_and_does_not_overlap_fps_patches(self):
+        writes = compile_patches(XML, [SPRINT_FIX], '01.09', SEGMENTS)
+        # eboot vaddr 0x1514b92-0x1514c95: the stuck check's block in the movement update.
+        self.assertEqual([(offset, len(data)) for offset, data in writes], [(0x1514b92, 0x103)])
+        fix = range(0x1514b92, 0x1514c95)
+        for patch in ('30 FPS++', '60 FPS++', '90 FPS++', 'Uncap FPS++'):
+            for offset, data in compile_patches(XML, [patch], '01.09', SEGMENTS):
+                self.assertFalse(set(range(offset, offset+len(data))) & set(fix), patch)
+
+    def test_sprint_fix_matches_its_assembly_source(self):
+        build = ROOT / 'tools/patch_asm/build.sh'
+        if not shutil.which('as') or not shutil.which('ld'):
+            self.skipTest('GNU as/ld are not installed')
+        built = subprocess.run(['bash', str(build), str(ROOT / 'tools/patch_asm/sprint_slowdown.s')],
+                               check=True, capture_output=True, text=True).stdout.strip()
+        writes = compile_patches(XML, [SPRINT_FIX], '01.09', SEGMENTS)
+        self.assertEqual(writes[0][1].hex(), built)
+        # The recovery entry the two outside branches use stays at 0x1514c60.
+        self.assertEqual(writes[0][1][0x1514c60-0x1514b92:][:9].hex(), 'c4c17a1085e0010000')
 
 
 class DebugPatchTests(unittest.TestCase):

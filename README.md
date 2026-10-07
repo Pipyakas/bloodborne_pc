@@ -47,7 +47,10 @@ Mesa/RADV) has been tested thoroughly.
   updates alongside fixed timestep fixes; ~90 FPS at 4K with FSR 4 Balanced on an RX 7800 XT,
   ~150 FPS at 1440p with FSR 4 Quality. Also 30/60/90 FPS modes. This is **not a fully
   framerate-independent simulation**: `Uncap FPS++` warns of Havok problems above 90 FPS.
-  A high rendering FPS is not proof of correct sprint, collision, stamina or cloth timing.
+  Above 30 FPS bbport adds its own *High FPS sprint slowdown fix*: the game's "stuck against a
+  wall" check counted distance per frame, so at 90–120 FPS a sprint could latch at half speed
+  (the same bug as Dark Souls III's; `tools/patch_asm/sprint_slowdown.s`). A high rendering FPS
+  is still not proof of correct collision, stamina or cloth timing.
 - **Temporal upscaling built for this game.** Bloodborne has no velocity buffer, so bbport
   computes motion vectors itself: camera motion from depth and the scene matrices, and object
   motion (characters, cloth, weapons) from the vertex positions of the previous frame. The

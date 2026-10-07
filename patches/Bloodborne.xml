@@ -1522,6 +1522,11 @@ Will help with better input delay/response times for 90 FPS. Remember to change 
             <Line Type="bytes" Address="0x04D28418" Value="8988883C"/>
         </PatchList>
     </Metadata>
+    <Metadata Title="Bloodborne" Name="High FPS sprint slowdown fix" Note="The movement update slows a running character who moved under 1/30 unit in a frame (stuck against a wall), by 0.8 per frame, and restores it by 1.2 per frame: tuned for 30 FPS, so at 60-120 FPS a normal sprint can latch at half speed. This uses distance per second and per-second rates; identical at 30 FPS. Same bug and fix as DS3DebugFPS 2.0's FixSprintSlowdown. Source: tools/patch_asm/sprint_slowdown.s" Author="bbport" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="false">
+        <PatchList>
+            <Line Type="bytes" Address="0x01914B92" Value="498B4508488B80B0030000488B4068C5F82880E0010000C5F85C80F0010000C4E37940C071C5FA51C0C5FA590569174103E869000000C5F82ED00F868E000000C4C17A1085E0010000C5F82E054D1741030F86D9000000C5FA100D5E000000C5F259CAC5F259D9C5E2581D4A000000C5F2590D3E000000C5E258E1C5E25CD9C5DA5ECBC5FA59C1C4C17A1185E0010000EB7141C785E00100000000803FEB64C5FA10558CC5EA5915EE164103C5E057DBC5EA5FD3C30000C04000004041BE7F64BE81B23A3ECCCCCCCCCCCCCCCCCCC4C17A1085E0010000C5FA100DA7164103C5F82EC876ADE8B5FFFFFFC5FA100DCFFFFFFFE968FFFFFFCCCCCCCCCCCCCCCCCCCCCCCC"/>
+        </PatchList>
+    </Metadata>
     <Metadata Title="Bloodborne" Name="Restore Debug Menu (READ NOTES)" Author="Whitehawkx, auser1337" Note="This patch requires debug font files, which is available from nexusmods. It will crash without them. Access the menu by pressing left side of touchpad. " PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="false">
         <PatchList>
             <Line Type="bytes" Address="0x136D90D" Value="75"/>
