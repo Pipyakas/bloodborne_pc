@@ -118,6 +118,7 @@ private:
     bool quit = false, finished = false;
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
+    SDL_Gamepad* gamepad = nullptr;
     float scale = 1.0f;
     int focused_page = -1;
     bool page_focus = true;
@@ -586,6 +587,7 @@ int FirstRun::Run() {
     font_config.FontDataOwnedByAtlas = false;
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(font), font_size, BbImGui::FontSize, &font_config);
     ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
+    ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_Manual, nullptr, 0);
     ImGui_ImplSDLRenderer3_Init(renderer);
 
     while (!quit && !finished) {
@@ -602,7 +604,17 @@ int FirstRun::Run() {
         PollInstall();
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
-        BbImGui::PollDirections();
+        if (gamepad && !SDL_GamepadConnected(gamepad)) {
+            SDL_CloseGamepad(gamepad);
+            gamepad = nullptr;
+        }
+        if (!gamepad) {
+            int count = 0;
+            SDL_JoystickID* ids = SDL_GetGamepads(&count);
+            for (int i = 0; i < count && !gamepad; ++i) gamepad = SDL_OpenGamepad(ids[i]);
+            SDL_free(ids);
+        }
+        BbImGui::PollGamepad(gamepad);
         const bool was_editing = ImGui::IsAnyItemActive() ||
             ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         ImGui::NewFrame();
@@ -635,6 +647,7 @@ int FirstRun::Run() {
     }
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
+    if (gamepad) SDL_CloseGamepad(gamepad);
     ImGui::DestroyContext();
     if (target) SDL_DestroyTexture(target);
     SDL_DestroyRenderer(renderer);

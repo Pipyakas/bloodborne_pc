@@ -40,25 +40,48 @@ inline void Directions(uint32_t buttons, const std::array<float, SDL_GAMEPAD_AXI
     scroll(ImGuiKey_GamepadLStickDown, axes[SDL_GAMEPAD_AXIS_RIGHTY]);
 }
 
-// SDL's platform backend opens the gamepads and supplies the other navigation keys.
-// Apply the same stick convention to the first-launch context after its backend NewFrame.
-inline void PollDirections() {
-    int count = 0;
-    SDL_JoystickID* ids = SDL_GetGamepads(&count);
+inline ImGuiKey ButtonKey(SDL_GamepadButton button) {
+    switch (button) {
+    case SDL_GAMEPAD_BUTTON_SOUTH: return ImGuiKey_GamepadFaceDown;
+    case SDL_GAMEPAD_BUTTON_EAST: return ImGuiKey_GamepadFaceRight;
+    case SDL_GAMEPAD_BUTTON_WEST: return ImGuiKey_GamepadFaceLeft;
+    case SDL_GAMEPAD_BUTTON_NORTH: return ImGuiKey_GamepadFaceUp;
+    case SDL_GAMEPAD_BUTTON_DPAD_UP: return ImGuiKey_GamepadDpadUp;
+    case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return ImGuiKey_GamepadDpadDown;
+    case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return ImGuiKey_GamepadDpadLeft;
+    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return ImGuiKey_GamepadDpadRight;
+    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return ImGuiKey_GamepadL1;
+    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return ImGuiKey_GamepadR1;
+    case SDL_GAMEPAD_BUTTON_LEFT_STICK: return ImGuiKey_GamepadL3;
+    case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return ImGuiKey_GamepadR3;
+    case SDL_GAMEPAD_BUTTON_START: return ImGuiKey_GamepadStart;
+    case SDL_GAMEPAD_BUTTON_BACK: return ImGuiKey_GamepadBack;
+    default: return ImGuiKey_None;
+    }
+}
+
+// The first-launch SDL backend is in manual/empty gamepad mode. Own this polling so its
+// default left-stick scrolling cannot enqueue conflicting events with our remapped focus.
+inline void PollGamepad(SDL_Gamepad* pad) {
+    auto& io = ImGui::GetIO();
+    if (pad) io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    else io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
     uint32_t buttons = 0;
     std::array<float, SDL_GAMEPAD_AXIS_COUNT> axes{};
-    for (int i = 0; i < count; ++i) {
-        SDL_Gamepad* pad = SDL_GetGamepadFromID(ids[i]);
-        if (!pad) continue;
-        for (int button = SDL_GAMEPAD_BUTTON_DPAD_UP; button <= SDL_GAMEPAD_BUTTON_DPAD_RIGHT; ++button)
-            if (SDL_GetGamepadButton(pad, SDL_GamepadButton(button))) buttons |= uint32_t(1) << button;
-        for (int axis = 0; axis < SDL_GAMEPAD_AXIS_COUNT; ++axis) {
-            const float value = AxisValue(SDL_GetGamepadAxis(pad, SDL_GamepadAxis(axis)));
-            if (std::abs(value) > std::abs(axes[axis])) axes[axis] = value;
-        }
+    for (int button = 0; button < SDL_GAMEPAD_BUTTON_COUNT; ++button) {
+        const bool down = pad && SDL_GetGamepadButton(pad, SDL_GamepadButton(button));
+        if (down) buttons |= uint32_t(1) << button;
+        if (button >= SDL_GAMEPAD_BUTTON_DPAD_UP && button <= SDL_GAMEPAD_BUTTON_DPAD_RIGHT) continue;
+        if (const ImGuiKey key = ButtonKey(SDL_GamepadButton(button)); key != ImGuiKey_None)
+            io.AddKeyEvent(key, down);
     }
-    SDL_free(ids);
+    if (pad) for (int axis = 0; axis < SDL_GAMEPAD_AXIS_COUNT; ++axis)
+        axes[axis] = AxisValue(SDL_GetGamepadAxis(pad, SDL_GamepadAxis(axis)));
     Directions(buttons, axes);
+    io.AddKeyAnalogEvent(ImGuiKey_GamepadL2, axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] > 0,
+                        axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER]);
+    io.AddKeyAnalogEvent(ImGuiKey_GamepadR2, axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0,
+                        axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER]);
 }
 
 inline void ControllerStyle() {
@@ -78,6 +101,7 @@ inline void ControllerStyle() {
     style.GrabRounding = 5.0f;
     style.WindowBorderSize = 1.0f;
     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.07f, 0.07f, 0.08f, 0.96f);
+    style.Colors[ImGuiCol_PopupBg] = ImVec4(0.07f, 0.07f, 0.08f, 0.98f);
     style.Colors[ImGuiCol_Border] = ImVec4(0.55f, 0.48f, 0.32f, 0.8f);
     style.Colors[ImGuiCol_NavCursor] = ImVec4(1.0f, 0.82f, 0.35f, 1.0f);
     style.Colors[ImGuiCol_Button] = ImVec4(0.22f, 0.20f, 0.17f, 1.0f);

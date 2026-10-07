@@ -178,6 +178,47 @@ int main() {
     BbOverlay::HandleEvent(removed);
     assert(!BbOverlay::CapturesInput());
 
+    // The first-launch polling path must not alternate pressed/released events while a
+    // direction is held. Use an actual SDL virtual gamepad, not a hand-written key state.
+    assert(SDL_Init(SDL_INIT_GAMEPAD));
+    SDL_VirtualJoystickDesc desc{};
+    SDL_INIT_INTERFACE(&desc);
+    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+    desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+    desc.axis_mask = (uint32_t(1) << SDL_GAMEPAD_AXIS_COUNT) - 1;
+    desc.button_mask = (uint32_t(1) << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+    desc.name = "bbport navigation test";
+    const SDL_JoystickID virtual_id = SDL_AttachVirtualJoystick(&desc);
+    assert(virtual_id);
+    SDL_Gamepad* pad = SDL_OpenGamepad(virtual_id);
+    assert(pad);
+    SDL_Joystick* joystick = SDL_GetGamepadJoystick(pad);
+    assert(SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, 32767));
+    SDL_UpdateJoysticks();
+    float duration = -1.0f;
+    for (int i = 0; i < 6; ++i) {
+        BbImGui::PollGamepad(pad);
+        frame();
+        const auto& key = io.KeysData[ImGuiKey_GamepadDpadRight - ImGuiKey_NamedKey_BEGIN];
+        assert(key.Down && key.DownDuration > duration);
+        duration = key.DownDuration;
+    }
+    assert(SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, 0));
+    assert(SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_DPAD_DOWN, true));
+    SDL_UpdateJoysticks();
+    BbImGui::PollGamepad(pad);
+    frame();
+    assert(!io.KeysData[ImGuiKey_GamepadDpadRight - ImGuiKey_NamedKey_BEGIN].Down);
+    assert(io.KeysData[ImGuiKey_GamepadDpadDown - ImGuiKey_NamedKey_BEGIN].Down);
+    SDL_CloseGamepad(pad);
+    assert(SDL_DetachVirtualJoystick(virtual_id));
+    BbImGui::PollGamepad(nullptr);
+    frame();
+    assert(!(io.BackendFlags & ImGuiBackendFlags_HasGamepad));
+    assert(!io.KeysData[ImGuiKey_GamepadDpadDown - ImGuiKey_NamedKey_BEGIN].Down);
+    SDL_Quit();
+
     ImGui::DestroyContext();
     std::puts("PASS: text entry, gamepad keyboard, stick/D-pad navigation, menu toggle/back and input isolation");
 }
