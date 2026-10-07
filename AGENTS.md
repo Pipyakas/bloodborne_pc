@@ -69,11 +69,14 @@ Before reporting implementation work as finished:
    WIP commits. Prefer a fast-forward when possible; otherwise merge only a
    fully ready branch, or cherry-pick your isolated completed commits. Test any
    conflict resolution before proceeding.
-4. Build on d1: run `bash build.sh` in `/var/mnt/ssd1/bloodborne_pc` (native Linux
-   build and tests), and let the timer (or `tools/cross/build-windows.sh master`) make
-   the Windows build. Check that `dist/windows/BUILD` names your commit; if the
-   Windows build failed, `.cross/build.log` says why and `dist/windows` keeps the
-   previous build.
+4. Build on d1: every new `master` commit is built for both Windows and Linux by the
+   timer (started at once by the post-commit/post-merge hooks of
+   `tools/cross/install-autobuild.sh`), or run `tools/cross/build-windows.sh master` and
+   `tools/cross/build-linux.sh master` yourself. d1's host has no build dependencies:
+   both builds run in containers. Check that `dist/windows/BUILD` and `dist/linux/BUILD`
+   name your commit; if a build failed, `.cross/build.log` (Windows) or
+   `.cross/linux-build.log` (Linux) says why and the previous build stays in `dist/`.
+   A commit that breaks either platform is not done.
 5. For runtime changes, smoke-test on the laptop: run `bbport-update.ps1` in
    `D:\bbport` (or start through the shortcut only with the user's permission),
    then `python\python.exe tools\mcp\bbport_mcp.py launch` there; stop your test

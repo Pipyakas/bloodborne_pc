@@ -251,8 +251,10 @@ PC only runs it. `tools/cross/build-windows.sh [commit]` (needs podman) cross-co
 clang against MSYS2's CLANG64 packages (the same libraries a native build uses) in a container,
 then stages a complete install in `dist/windows`: the commit's files, `out\bb-probe.exe` with
 every DLL it needs, and an embeddable Python for the launcher scripts, so the PC needs neither
-MSYS2 nor a compiler. `tools/cross/install-autobuild.sh` adds a systemd user timer that rebuilds
-`dist/windows` whenever `master` moves. On the PC, an install folder holds `Bloodborne.cmd`
+MSYS2 nor a compiler. `tools/cross/build-linux.sh [commit]` builds the native Linux port the same
+way (a container with the libraries, output in `dist/linux`), so the build host needs no development
+packages. `tools/cross/install-autobuild.sh` adds a systemd user timer and git hooks that build
+every new `master` commit for both platforms. On the PC, an install folder holds `Bloodborne.cmd`
 (the setup program's launcher with one extra line that runs `bbport-update.ps1` first): it
 asks the build machine over SSH (`ssh d1` by default; `BBPORT_REMOTE`, `BBPORT_REMOTE_DIST`)
 for its latest build and copies it in when it changed, keeping `bbport.ini`, saves, mods,
