@@ -37,9 +37,10 @@
 The user tests the port on the Windows laptop through the **Bloodborne (bbport)**
 Start menu shortcut. It launches `D:\bbport\Bloodborne.cmd`, which first pulls
 d1's latest Windows build (`tools/cross/bbport-update.ps1`) and then starts it. d1 makes
-that build from `master` automatically: the `bbport-wincross.timer` user timer runs
-`tools/cross/build-windows.sh --if-changed master` every 2 minutes and stages
-`dist/windows` (log: `.cross/build.log`). Never build on the laptop unless the user asks; if a build there is ever needed, its output
+that build from `master` automatically: the `bbport-wincross.timer` user timer (and the
+post-commit/post-merge hooks) run `tools/cross/build-windows.sh --if-changed master` and
+`tools/cross/build-linux.sh --if-changed master`, staging `dist/windows` and `dist/linux`
+(logs: `.cross/build.log`, `.cross/linux-build.log`). Never build on the laptop unless the user asks; if a build there is ever needed, its output
 goes to `D:\bbport` too (the laptop's only bbport build/install folder), never to another
 folder. `C:\code\bloodborne_pc` there is an old checkout, not the playable build.
 
