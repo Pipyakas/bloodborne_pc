@@ -17,6 +17,10 @@ reviewed implementation belongs under [`decomp/`](../../decomp/README.md).
 
 ## Published snapshot
 
+The [2026-10-08 static checkpoint](STATIC_PROGRESS_2026-10-08.md) records later
+independently reviewed slices, tooling repairs and remaining provisional work.
+Research was stopped at the owner's request; no runtime replacements were enabled.
+
 The topic folders contain analyst-written findings, hypotheses, addresses and
 limited explanatory instruction excerpts for CUSA03173 v1.09. They are a
 2026-10-06 snapshot of research, not independently certified conclusions.
